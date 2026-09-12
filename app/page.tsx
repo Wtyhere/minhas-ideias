@@ -37,6 +37,9 @@ import {
   Download,
   Lock,
   Sparkles,
+  Eye, 
+  EyeOff,
+  Loader2
 } from 'lucide-react';
 import { useAuth } from '@/lib/context/AuthContext';
 import { Idea, Comment, IdeaStatus } from '@/types/idea';
@@ -100,8 +103,13 @@ export default function HomePage() {
   const [detailsCommentFile, setDetailsCommentFile] = useState<string | null>(null);
 
   // Login form fields (when not logged in)
-  const [loginEmail, setLoginEmail] = useState('usuario@cm.com.br');
-  const [loginPassword, setLoginPassword] = useState('123456');
+  const [loginEmail, setLoginEmail] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+
+  // Show password button
+  const [showPassword, setShowPassword] = useState(false);
+
+  const [isLoading, setIsLoading] = useState(false);
 
   // Toasts
   const [toasts, setToasts] = useState<ToastItem[]>([]);
@@ -510,12 +518,17 @@ export default function HomePage() {
                 Sua voz constrói o futuro do <span className="text-emerald-700 font-semibold">Varejofacil</span> e <span className="text-teal-700 font-semibold">SysPDV</span>
               </p>
             </div>
-
             <form
               id="login-form"
-              onSubmit={(e) => {
+              onSubmit={async (e) => {
                 e.preventDefault();
-                handleExecuteLogin(loginEmail, loginPassword);
+                setIsLoading(true);
+                try {
+                  await handleExecuteLogin(loginEmail, loginPassword);
+                } finally {
+                  // Caso queira desativar o loading se falhar, ou redirecionar se passar
+                  setIsLoading(false);
+                }
               }}
               className="space-y-4 relative z-10"
             >
@@ -527,10 +540,10 @@ export default function HomePage() {
                   id="input-email"
                   type="email"
                   required
+                  disabled={isLoading}
                   value={loginEmail}
                   onChange={(e) => setLoginEmail(e.target.value)}
-                  placeholder="seu.email@cm.com.br"
-                  className="w-full px-4 py-3 bg-slate-50/80 border border-slate-200 rounded-xl text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white transition-all text-sm shadow-sm"
+                  className="w-full px-4 py-3 bg-slate-50/80 border border-slate-200 rounded-xl text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white transition-all text-sm shadow-sm disabled:opacity-50"
                 />
               </div>
 
@@ -538,58 +551,50 @@ export default function HomePage() {
                 <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1.5">
                   Senha de Acesso
                 </label>
-                <input
-                  id="input-password"
-                  type="password"
-                  required
-                  value={loginPassword}
-                  onChange={(e) => setLoginPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full px-4 py-3 bg-slate-50/80 border border-slate-200 rounded-xl text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white transition-all text-sm shadow-sm"
-                />
+                <div className="relative">
+                  <input
+                    id="input-password"
+                    type={showPassword ? "text" : "password"}
+                    required
+                    disabled={isLoading}
+                    value={loginPassword}
+                    onChange={(e) => setLoginPassword(e.target.value)}
+                    className="w-full px-4 py-3 pr-12 bg-slate-50/80 border border-slate-200 rounded-xl text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white transition-all text-sm shadow-sm disabled:opacity-50"
+                  />
+                  <button
+                    type="button"
+                    disabled={isLoading}
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 focus:outline-none transition-colors disabled:opacity-50"
+                  >
+                    {showPassword ? (
+                      <EyeOff className="w-5 h-5" />
+                    ) : (
+                      <Eye className="w-5 h-5" />
+                    )}
+                  </button>
+                </div>
               </div>
 
               <button
                 type="submit"
-                className="w-full py-3.5 px-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:scale-[0.99] text-white font-semibold rounded-xl shadow-lg shadow-emerald-600/20 transition-all text-sm flex items-center justify-center gap-2 cursor-pointer"
+                disabled={isLoading}
+                className="w-full py-3.5 px-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:scale-[0.99] text-white font-semibold rounded-xl shadow-lg shadow-emerald-600/20 transition-all text-sm flex items-center justify-center gap-2 cursor-pointer disabled:opacity-75 disabled:cursor-not-allowed"
               >
-                <span>Entrar no Portal</span>
-                <ChevronRight className="w-4 h-4" />
+                {isLoading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Entrando...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>Entrar no Portal</span>
+                    <ChevronRight className="w-4 h-4" />
+                  </>
+                )}
               </button>
             </form>
 
-            <div className="mt-6 pt-6 border-t border-slate-100 relative z-10">
-              <p className="text-xs text-center text-slate-400 font-medium mb-3">Atalhos rápidos para demonstração:</p>
-              <div className="grid grid-cols-2 gap-2.5">
-                <button
-                  type="button"
-                  id="btn-shortcut-user"
-                  onClick={() => {
-                    setLoginEmail('usuario@cm.com.br');
-                    setLoginPassword('123456');
-                    handleExecuteLogin('usuario@cm.com.br', '123456');
-                  }}
-                  className="p-3 bg-emerald-50/60 hover:bg-emerald-50 border border-emerald-100 rounded-xl text-left text-xs transition-colors group cursor-pointer"
-                >
-                  <div className="font-semibold text-emerald-800 group-hover:text-emerald-900">Supermercadista</div>
-                  <div className="text-[11px] text-slate-500 truncate mt-0.5">usuario@cm.com.br</div>
-                </button>
-
-                <button
-                  type="button"
-                  id="btn-shortcut-admin"
-                  onClick={() => {
-                    setLoginEmail('adrmin@cm.com.br');
-                    setLoginPassword('123456');
-                    handleExecuteLogin('adrmin@cm.com.br', '123456');
-                  }}
-                  className="p-3 bg-teal-50/60 hover:bg-teal-50 border border-teal-100 rounded-xl text-left text-xs transition-colors group cursor-pointer"
-                >
-                  <div className="font-semibold text-teal-800 group-hover:text-teal-900">Admin Casa Magalhães</div>
-                  <div className="text-[11px] text-slate-500 truncate mt-0.5">adrmin@cm.com.br</div>
-                </button>
-              </div>
-            </div>
           </div>
         </div>
       </>
