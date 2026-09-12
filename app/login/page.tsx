@@ -97,6 +97,7 @@ export default function LoginPage() {
             <h1 className="text-2xl font-bold tracking-tight text-slate-900">Minhas Ideias na CM</h1>
             <p className="text-xs sm:text-sm text-slate-500 mt-1.5 leading-relaxed max-w-xs mx-auto">
               Sua voz constrói o futuro do <span className="text-emerald-700 font-semibold">Varejofacil</span> e <span className="text-teal-700 font-semibold">SysPDV</span>
+              Aqui é um teste
             </p>
           </div>
 
