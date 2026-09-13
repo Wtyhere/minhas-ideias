@@ -1,6 +1,7 @@
 export interface Attachment {
   name: string;
   size: string;
+  url?: string;
 }
 
 export interface Comment {
@@ -41,4 +42,6 @@ export interface Idea {
   mergedIntoId?: string;
   votes: Record<string, number>;
   comments: Comment[];
+  fromSupabase?: boolean;
+  userId?: string;
 }

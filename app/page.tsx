@@ -47,6 +47,14 @@ import { User } from '@/types/auth';
 import { INITIAL_IDEAS } from '@/lib/data';
 import ChangePasswordModal from '../app/components/ChangePassWordModal';
 
+const ALLOWED_FILE_EXTENSIONS = ['.xlsx', '.csv', '.pdf', '.png', '.jpg', '.jpeg'];
+const isAllowedFileExtension = (fileName: string): boolean => {
+  const dotIndex = fileName.lastIndexOf('.');
+  if (dotIndex === -1) return false;
+  const ext = fileName.slice(dotIndex).toLowerCase();
+  return ALLOWED_FILE_EXTENSIONS.includes(ext);
+};
+
 interface ToastItem {
   id: number;
   message: string;
@@ -58,12 +66,15 @@ export default function HomePage() {
   const { user, loading, login, logout } = useAuth();
 
   // State matching index.html
-  const [ideas, setIdeas] = useState<Idea[]>(INITIAL_IDEAS);
+  const [ideas, setIdeas] = useState<Idea[]>([]);
+  const [ideasLoading, setIdeasLoading] = useState(true);
+  const [submittingIdea, setSubmittingIdea] = useState(false);
+  const [triageLoading, setTriageLoading] = useState(false);
   const [users, setUsers] = useState<User[]>([]);
   const [usersLoading, setUsersLoading] = useState(false);
   const [usersFetched, setUsersFetched] = useState(false);
   const [activeTab, setActiveTab] = useState<'board' | 'new-idea' | 'admin-review' | 'prioritization' | 'users'>('board');
-  const [statusTab, setStatusTab] = useState<'disponiveis' | 'desenvolvimento' | 'entregues'>('disponiveis');
+  const [statusTab, setStatusTab] = useState<'disponiveis' | 'desenvolvimento' | 'entregues' | 'minhas'>('disponiveis');
   const [selectedProduct, setSelectedProduct] = useState<'TODOS' | 'Varejofacil' | 'SysPDV'>('TODOS');
   const [selectedCategory, setSelectedCategory] = useState<string>('TODOS');
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -76,6 +87,13 @@ export default function HomePage() {
   const [completingIdeaId, setCompletingIdeaId] = useState<string | null>(null);
   const [buildNumberInput, setBuildNumberInput] = useState<string>('');
   const [mergeTargetId, setMergeTargetId] = useState<string>('');
+
+  // Rejection modal
+  const [rejectModalOpen, setRejectModalOpen] = useState(false);
+  const [rejectIdeaId, setRejectIdeaId] = useState<string | null>(null);
+  const [rejectionReasonInput, setRejectionReasonInput] = useState('');
+  const [rejectSubmitting, setRejectSubmitting] = useState(false);
+  const [rejectError, setRejectError] = useState('');
 
   // User Management
   const [userModalOpen, setUserModalOpen] = useState<boolean>(false);
@@ -165,6 +183,26 @@ export default function HomePage() {
     }
   };
 
+  // Busca ideias do Supabase ao carregar a página
+  useEffect(() => {
+    async function fetchIdeas() {
+      setIdeasLoading(true);
+      try {
+        const res = await fetch('/api/ideas');
+        const data = await res.json();
+        if (data.success && Array.isArray(data.ideas)) {
+          setIdeas(data.ideas);
+        }
+      } catch (err) {
+        console.error('Erro ao buscar ideias do Supabase:', err);
+      } finally {
+        setIdeasLoading(false);
+      }
+    }
+
+    fetchIdeas();
+  }, []);
+
   // Busca usuários do Supabase ao acessar a aba de usuários
   useEffect(() => {
     if (activeTab !== 'users' || user?.role !== 'admin' || usersFetched) return;
@@ -191,6 +229,37 @@ export default function HomePage() {
     fetchUsers();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, user?.role]);
+
+  // Consulta ideias pendentes de triagem no Supabase ao acessar a aba de triagem
+  useEffect(() => {
+    if (activeTab !== 'admin-review') return;
+
+    async function fetchTriageIdeas() {
+      setTriageLoading(true);
+      try {
+        const res = await fetch('/api/ideas?status=pending_review');
+        const data = await res.json();
+        if (data.success && Array.isArray(data.ideas)) {
+          setIdeas((prev) => {
+            // Remove quaisquer ideias pendentes locais e substitui pelas ideias reais do Supabase
+            const fetchedTriageIds = new Set(data.ideas.map((i: Idea) => i.id));
+            const otherIdeas = prev.filter(
+              (i) => i.status !== 'pending_review' || fetchedTriageIds.has(i.id)
+            );
+            const otherIds = new Set(otherIdeas.map((i) => i.id));
+            const newTriage = data.ideas.filter((i: Idea) => !otherIds.has(i.id));
+            return [...newTriage, ...otherIdeas];
+          });
+        }
+      } catch (err) {
+        console.error('Erro ao consultar ideias pendentes do Supabase:', err);
+      } finally {
+        setTriageLoading(false);
+      }
+    }
+
+    fetchTriageIdeas();
+  }, [activeTab]);
 
   const calculateScore = (votes: Record<string, number> = {}) => {
     return Object.values(votes).reduce((acc, val) => acc + val, 0);
@@ -226,12 +295,42 @@ export default function HomePage() {
     return map[status] || 'bg-slate-50 text-slate-600 border-slate-200';
   };
 
+  const getRejectionReason = (idea: Idea | null | undefined): string => {
+    if (!idea || !idea.comments || idea.comments.length === 0) return 'Nenhum motivo detalhado informado.';
+    const rejectionComment = [...idea.comments].reverse().find((c) => c.text && c.text.includes('[Motivo da Recusa]'));
+    if (rejectionComment) {
+      return rejectionComment.text.replace('[Motivo da Recusa]:', '').trim();
+    }
+    return idea.comments[idea.comments.length - 1].text;
+  };
+
+  const isIdeaAuthor = (idea: Idea | null | undefined): boolean => {
+    if (!idea || !user) return false;
+    const authorEmail = idea.authorEmail?.trim().toLowerCase();
+    const userEmail = user.email?.trim().toLowerCase();
+    if (authorEmail && userEmail && authorEmail === userEmail) {
+      return true;
+    }
+    if (idea.userId && user.id && idea.userId === user.id) {
+      return true;
+    }
+    return false;
+  };
+
   const handleVote = (ideaId: string, value: number) => {
     if (!user) return;
     if (user.role === 'admin') {
       showToast('Administradores possuem permissão apenas de visualização dos votos.');
       return;
     }
+
+    const targetIdea = ideas.find((i) => i.id === ideaId);
+    if (isIdeaAuthor(targetIdea)) {
+      showToast('Você não pode votar na ideia que você mesmo cadastrou.');
+      return;
+    }
+
+    let updatedVotes: Record<string, number> | null = null;
 
     setIdeas((prev) =>
       prev.map((idea) => {
@@ -243,9 +342,21 @@ export default function HomePage() {
         } else {
           newVotes[user.email] = value;
         }
+        updatedVotes = newVotes;
         return { ...idea, votes: newVotes };
       })
     );
+
+    // Se a ideia foi cadastrada no Supabase, sincroniza os votos no banco
+    if (targetIdea?.fromSupabase && updatedVotes) {
+      fetch(`/api/ideas/${ideaId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ votes: updatedVotes }),
+      }).catch((err) => {
+        console.error('Erro ao sincronizar voto no Supabase:', err);
+      });
+    }
   };
 
   const handleAddComment = (ideaId: string, text: string, attachmentName?: string | null) => {
@@ -301,21 +412,101 @@ export default function HomePage() {
     showToast(`Demanda concluída e disponibilizada na ${build.trim()}!`);
   };
 
-  const approveIdea = (id: string) => {
+  const approveIdea = async (id: string) => {
     setIdeas((prev) =>
       prev.map((idea) => (idea.id === id ? { ...idea, status: 'voting' } : idea))
     );
     showToast('Ideia aprovada e liberada para votação pública!');
+
+    const target = ideas.find((i) => i.id === id);
+    if (target?.fromSupabase) {
+      try {
+        await fetch(`/api/ideas/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'voting' }),
+        });
+      } catch (err) {
+        console.error('Erro ao salvar aprovação no Supabase:', err);
+      }
+    }
   };
 
-  const rejectIdea = (id: string) => {
+  const openRejectModal = (id: string) => {
+    setRejectIdeaId(id);
+    setRejectionReasonInput('');
+    setRejectError('');
+    setRejectModalOpen(true);
+  };
+
+  const handleConfirmReject = async () => {
+    if (!rejectIdeaId) return;
+    const reason = rejectionReasonInput.trim();
+    if (!reason) {
+      setRejectError('O comentário com a justificativa da recusa é obrigatório.');
+      return;
+    }
+
+    const target = ideas.find((i) => i.id === rejectIdeaId);
+    if (!target) return;
+
+    setRejectSubmitting(true);
+    setRejectError('');
+
+    const rejectionComment: Comment = {
+      id: `comm-reject-${Date.now()}`,
+      userName: user?.name || 'Curadoria Casa Magalhães',
+      userEmail: user?.email || 'admin@cm.com.br',
+      text: `[Motivo da Recusa]: ${reason}`,
+      date: new Date().toISOString().split('T')[0],
+      attachmentName: null,
+    };
+
+    const updatedComments = [...target.comments, rejectionComment];
+
     setIdeas((prev) =>
-      prev.map((idea) => (idea.id === id ? { ...idea, status: 'rejected' } : idea))
+      prev.map((idea) =>
+        idea.id === rejectIdeaId
+          ? {
+              ...idea,
+              status: 'rejected',
+              comments: updatedComments,
+            }
+          : idea
+      )
     );
-    showToast('Ideia recusada na triagem.');
+
+    if (target.fromSupabase) {
+      try {
+        const res = await fetch(`/api/ideas/${rejectIdeaId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            status: 'rejected',
+            rejectionReason: reason,
+            comments: updatedComments,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || 'Erro ao registrar recusa no servidor.');
+        }
+      } catch (err: any) {
+        console.error('Erro ao salvar recusa no Supabase:', err);
+        showToast(err.message || 'Erro ao registrar recusa.');
+        setRejectSubmitting(false);
+        return;
+      }
+    }
+
+    setRejectSubmitting(false);
+    setRejectModalOpen(false);
+    setRejectIdeaId(null);
+    setRejectionReasonInput('');
+    showToast('Ideia recusada com justificativa registrada!');
   };
 
-  const executeMerge = () => {
+  const executeMerge = async () => {
     if (!mergeTargetId || !ideaToMergeId) {
       showToast('Por favor, selecione uma demanda destino para agrupar.');
       return;
@@ -343,47 +534,104 @@ export default function HomePage() {
       })
     );
 
+    const sourceId = ideaToMergeId;
+    const targetId = mergeTargetId;
+
     setIdeaToMergeId(null);
     setMergeTargetId('');
     showToast('Ideias agrupadas com sucesso!');
+
+    if (sourceIdea?.fromSupabase) {
+      try {
+        await fetch(`/api/ideas/${sourceId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'merged', mergedIntoId: targetId }),
+        });
+      } catch (err) {
+        console.error('Erro ao salvar agrupamento no Supabase:', err);
+      }
+    }
   };
 
-  const handleCreateIdea = (e: React.FormEvent) => {
+  const handleCreateIdea = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user) return;
+    if (!user) {
+      showToast('Você precisa estar autenticado para submeter uma ideia.');
+      return;
+    }
     if (!newTitle.trim() || !newPain.trim() || !newWorkaround.trim()) {
       showToast('Por favor, preencha todos os campos obrigatórios!');
       return;
     }
 
-    const createdIdea: Idea = {
-      id: `ideia-${Date.now()}`,
-      title: newTitle.trim(),
-      product: newProduct,
-      category: newCategory,
-      company: user.unit || 'Supermercado Varejista',
-      authorName: user.name,
-      authorEmail: user.email,
-      createdAt: new Date().toISOString().split('T')[0],
-      cycle: activeCycle,
-      painDescription: newPain.trim(),
-      currentWorkaround: newWorkaround.trim(),
-      attachments: newFiles.map((f) => ({
-        name: f.name,
-        size: `${(f.size / (1024 * 1024)).toFixed(1)} MB`,
-      })),
-      status: 'pending_review',
-      votes: {},
-      comments: [],
-    };
+    // Regra: Somente permitido submeter para o Varejofacil
+    if (newProduct !== 'Varejofacil') {
+      showToast('O cadastro é permitido exclusivamente para o sistema Varejofacil.');
+      return;
+    }
 
-    setIdeas((prev) => [createdIdea, ...prev]);
-    setNewTitle('');
-    setNewPain('');
-    setNewWorkaround('');
-    setNewFiles([]);
-    setActiveTab('board');
-    showToast('Demanda submetida com sucesso! Em análise pela equipe Casa Magalhães.');
+    // Regra: Limite máximo de arquivo de 2MB
+    const MAX_FILE_SIZE = 2 * 1024 * 1024;
+    const oversizedFile = newFiles.find((f) => f.size > MAX_FILE_SIZE);
+    if (oversizedFile) {
+      showToast(`O arquivo "${oversizedFile.name}" ultrapassa o limite de 2MB.`);
+      return;
+    }
+
+    // Regra: Somente formatos .xlsx, .csv, .pdf, .png, .jpg
+    const invalidFormatFile = newFiles.find((f) => !isAllowedFileExtension(f.name));
+    if (invalidFormatFile) {
+      showToast(`O arquivo "${invalidFormatFile.name}" possui formato inválido. Permitidos: .xlsx, .csv, .pdf, .png, .jpg.`);
+      return;
+    }
+
+    setSubmittingIdea(true);
+
+    try {
+      const formData = new FormData();
+      formData.append('title', newTitle.trim());
+      formData.append('product', 'Varejofacil');
+      formData.append('category', newCategory);
+      formData.append('painDescription', newPain.trim());
+      formData.append('currentWorkaround', newWorkaround.trim());
+      formData.append('cycle', activeCycle);
+
+      if (user) {
+        formData.append('authorName', user.name || '');
+        formData.append('authorEmail', user.email || '');
+        formData.append('company', user.unit || user.cnpj || 'Supermercado Varejista');
+        formData.append('userId', user.id || '');
+      }
+
+      for (const file of newFiles) {
+        formData.append('files', file);
+      }
+
+      const res = await fetch('/api/ideas', {
+        method: 'POST',
+        body: formData,
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Erro ao submeter ideia para o Supabase.');
+      }
+
+      setIdeas((prev) => [data.idea, ...prev]);
+      setNewTitle('');
+      setNewPain('');
+      setNewWorkaround('');
+      setNewFiles([]);
+      setActiveTab('board');
+      showToast('Demanda submetida com sucesso! Em análise na Triagem e disponível no Mural após aprovação.');
+    } catch (err: any) {
+      console.error('Erro ao submeter ideia:', err);
+      showToast(err.message || 'Erro ao submeter ideia para avaliação.');
+    } finally {
+      setSubmittingIdea(false);
+    }
   };
 
   const handleExecuteLogin = async (email: string, pass: string) => {
@@ -624,14 +872,22 @@ export default function HomePage() {
   // Filter ideas logic matching index.html getFilteredIdeas()
   const getFilteredIdeas = () => {
     return ideas.filter((idea) => {
-      if (statusTab === 'disponiveis') {
-        if (idea.status !== 'voting') return false;
-      } else if (statusTab === 'desenvolvimento') {
-        if (!['pending_review', 'in_immersion', 'in_development', 'in_validation', 'in_pilot'].includes(idea.status)) {
-          return false;
+      if (statusTab === 'minhas') {
+        // Aba do usuário para acompanhar todas as suas demandas (inclusive as recusadas na triagem)
+        if (!isIdeaAuthor(idea)) return false;
+      } else {
+        // O Mural de Ideias público exibe apenas demandas já aprovadas (nunca em triagem ou recusadas)
+        if (idea.status === 'pending_review' || idea.status === 'rejected') return false;
+
+        if (statusTab === 'disponiveis') {
+          if (idea.status !== 'voting') return false;
+        } else if (statusTab === 'desenvolvimento') {
+          if (!['in_immersion', 'in_development', 'in_validation', 'in_pilot'].includes(idea.status)) {
+            return false;
+          }
+        } else if (statusTab === 'entregues') {
+          if (idea.status !== 'delivered') return false;
         }
-      } else if (statusTab === 'entregues') {
-        if (idea.status !== 'delivered') return false;
       }
 
       if (selectedProduct !== 'TODOS' && idea.product !== selectedProduct) return false;
@@ -785,15 +1041,23 @@ export default function HomePage() {
   const ideaToMerge = ideas.find((i) => i.id === ideaToMergeId) || null;
   const completingIdea = ideas.find((i) => i.id === completingIdeaId) || null;
 
-  const pendingCount = ideas.filter((i) => i.status === 'pending_review').length;
+  const triageIdeas = ideas.filter(
+    (i) => i.status === 'pending_review' && i.fromSupabase === true
+  );
+  const pendingCount = triageIdeas.length;
   const filteredIdeas = getFilteredIdeas();
+
+  const myIdeas = ideas.filter((i) => isIdeaAuthor(i));
+  const userReturnedIdeas = myIdeas.filter((i) => i.status === 'rejected');
+  const userReturnedCount = userReturnedIdeas.length;
 
   const statusCounts = {
     disponiveis: ideas.filter((i) => i.status === 'voting').length,
     desenvolvimento: ideas.filter((i) =>
-      ['pending_review', 'in_immersion', 'in_development', 'in_validation', 'in_pilot'].includes(i.status)
+      ['in_immersion', 'in_development', 'in_validation', 'in_pilot'].includes(i.status)
     ).length,
     entregues: ideas.filter((i) => i.status === 'delivered').length,
+    minhas: myIdeas.length,
   };
 
   //console.log(user)
@@ -1022,7 +1286,31 @@ export default function HomePage() {
               </div>
             </div>
 
-            {/* Tabs de Status: Disponíveis, Desenvolvimento, Entregues */}
+            {userReturnedCount > 0 && statusTab !== 'minhas' && (
+              <div className="bg-gradient-to-r from-rose-50 via-amber-50 to-orange-50 border border-rose-200 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-rose-100 text-rose-700 flex items-center justify-center shrink-0">
+                    <AlertCircle className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <div className="text-xs sm:text-sm font-bold text-rose-900">
+                      Você possui {userReturnedCount} {userReturnedCount === 1 ? 'ideia recusada' : 'ideias recusadas'} pela curadoria
+                    </div>
+                    <div className="text-[11px] sm:text-xs text-rose-700">
+                      A curadoria analisou e registrou a justificativa da recusa. Acesse a aba &quot;Minhas Ideias&quot; para consultar o parecer.
+                    </div>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setStatusTab('minhas')}
+                  className="px-3.5 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold transition-colors shrink-0 shadow-xs cursor-pointer"
+                >
+                  Ver Minhas Ideias Recusadas
+                </button>
+              </div>
+            )}
+
+            {/* Tabs de Status: Disponíveis, Desenvolvimento, Entregues, Minhas Ideias */}
             <div className="bg-white border border-slate-200/80 rounded-2xl p-2 shadow-xs flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2">
               <div className="flex items-center gap-1.5 overflow-x-auto p-0.5">
                 <button
@@ -1087,12 +1375,43 @@ export default function HomePage() {
                     {statusCounts.entregues}
                   </span>
                 </button>
+
+                {user && (
+                  <button
+                    onClick={() => setStatusTab('minhas')}
+                    className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
+                      statusTab === 'minhas'
+                        ? 'bg-amber-600 text-white shadow-md shadow-amber-600/20'
+                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                    }`}
+                  >
+                    <Lightbulb className="w-3.5 h-3.5" />
+                    <span>Minhas Ideias</span>
+                    <span
+                      className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                        statusTab === 'minhas'
+                          ? 'bg-white/20 text-white'
+                          : userReturnedCount > 0
+                          ? 'bg-rose-100 text-rose-800 border border-rose-200'
+                          : 'bg-amber-50 text-amber-800 border border-amber-200'
+                      }`}
+                    >
+                      {statusCounts.minhas}
+                    </span>
+                    {userReturnedCount > 0 && (
+                      <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-rose-600 text-white font-extrabold animate-pulse">
+                        {userReturnedCount} {userReturnedCount === 1 ? 'recusada' : 'recusadas'}
+                      </span>
+                    )}
+                  </button>
+                )}
               </div>
 
               <div className="text-[11px] text-slate-500 font-medium px-2 py-1 text-right hidden lg:block">
-                {statusTab === 'disponiveis' && 'Apenas ideias em votação pública aberta'}
-                {statusTab === 'desenvolvimento' && 'Demandas em triagem pela CM e em desenvolvimento de engenharia'}
+                {statusTab === 'disponiveis' && 'Apenas ideias aprovadas em votação pública aberta'}
+                {statusTab === 'desenvolvimento' && 'Demandas aprovadas em desenvolvimento de engenharia'}
                 {statusTab === 'entregues' && 'Funcionalidades já disponibilizadas na versão oficial do ERP/PDV'}
+                {statusTab === 'minhas' && 'Todas as demandas cadastradas por você, incluindo as recusadas na triagem'}
               </div>
             </div>
 
@@ -1163,6 +1482,7 @@ export default function HomePage() {
                 const score = calculateScore(idea.votes);
                 const userVote = user ? idea.votes[user.email] || 0 : 0;
                 const isSysPDV = idea.product === 'SysPDV';
+                const isAuthor = isIdeaAuthor(idea);
 
                 return (
                   <div
@@ -1250,6 +1570,24 @@ export default function HomePage() {
                           <span className="text-[11px] text-slate-400">(planilhas/documentos)</span>
                         </div>
                       )}
+
+                      {/* Box de Ideia Recusada / Justificativa da Recusa */}
+                      {idea.status === 'rejected' && (
+                        <div className="mt-3.5 bg-rose-50 border border-rose-200 p-4 rounded-2xl space-y-2">
+                          <div className="flex items-center gap-1.5 text-xs font-bold text-rose-800">
+                            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                            <span>Ideia Recusada pela Curadoria CM:</span>
+                          </div>
+                          <div>
+                            <span className="text-[11px] font-bold text-rose-700 block mb-0.5">
+                              Justificativa da Recusa:
+                            </span>
+                            <p className="text-xs text-rose-950 bg-white/90 p-3 rounded-xl border border-rose-200 font-medium leading-relaxed">
+                              {getRejectionReason(idea)}
+                            </p>
+                          </div>
+                        </div>
+                      )}
                     </div>
 
                     {/* Rodapé com Comentários e Curtidas */}
@@ -1289,6 +1627,22 @@ export default function HomePage() {
                               </span>
                               <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-200/80 text-slate-600 font-medium">
                                 Apenas leitura
+                              </span>
+                            </div>
+                          ) : isAuthor ? (
+                            <div
+                              className="flex items-center bg-amber-50/70 border border-amber-200/80 rounded-xl px-3 py-1.5 shadow-2xs text-xs text-amber-900 gap-2 select-none"
+                              title="Você cadastrou esta ideia e não pode votar na sua própria demanda"
+                            >
+                              <span className="flex items-center gap-1 text-amber-700">
+                                <ThumbsUp className="w-3.5 h-3.5 text-amber-500" />
+                                <span className="font-bold text-slate-800">
+                                  {score > 0 ? `+${score}` : score}
+                                </span>
+                                <span>{Math.abs(score) === 1 ? 'voto' : 'votos'}</span>
+                              </span>
+                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-semibold border border-amber-200">
+                                Sua ideia (Autor)
                               </span>
                             </div>
                           ) : (
@@ -1331,6 +1685,11 @@ export default function HomePage() {
                               </button>
                             </div>
                           )
+                        ) : idea.status === 'rejected' ? (
+                          <div className="text-xs text-rose-700 font-bold px-3 py-1.5 bg-rose-50 rounded-xl border border-rose-200 flex items-center gap-1.5">
+                            <AlertCircle className="w-3.5 h-3.5 text-rose-600" />
+                            <span>Recusada</span>
+                          </div>
                         ) : (
                           <div className="text-xs text-slate-500 font-semibold px-3 py-1.5 bg-slate-50 rounded-xl border border-slate-200 flex items-center gap-1">
                             <span className="text-slate-800 font-bold">{score}</span> votos consolidados
@@ -1352,16 +1711,25 @@ export default function HomePage() {
               })}
             </div>
 
-            {filteredIdeas.length === 0 && (
+            {ideasLoading && (
+              <div className="bg-white border border-slate-200 rounded-3xl p-12 text-center shadow-xs flex flex-col items-center justify-center gap-3">
+                <Loader2 className="w-8 h-8 text-emerald-600 animate-spin" />
+                <p className="text-xs text-slate-500 font-medium">Carregando ideias do Supabase...</p>
+              </div>
+            )}
+
+            {!ideasLoading && filteredIdeas.length === 0 && (
               <div className="bg-white border border-slate-200 rounded-3xl p-12 text-center shadow-xs">
                 <Lightbulb className="w-12 h-12 text-slate-300 mx-auto mb-3" />
                 <h3 className="text-base font-bold text-slate-800">
-                  {statusTab === 'disponiveis' && 'Nenhuma ideia em votação aberta'}
-                  {statusTab === 'desenvolvimento' && 'Nenhuma demanda em desenvolvimento ou análise'}
+                  {statusTab === 'disponiveis' && 'Nenhuma ideia aprovada para votação no momento'}
+                  {statusTab === 'desenvolvimento' && 'Nenhuma demanda em desenvolvimento'}
                   {statusTab === 'entregues' && 'Nenhuma demanda entregue neste filtro'}
                 </h3>
                 <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-                  Tente alterar seus termos de busca ou filtros de sistema/setor.
+                  {statusTab === 'disponiveis'
+                    ? 'As novas demandas enviadas aparecerão aqui assim que forem avaliadas e aprovadas na Triagem.'
+                    : 'Tente alterar seus termos de busca ou filtros de sistema/setor.'}
                 </p>
               </div>
             )}
@@ -1407,13 +1775,15 @@ export default function HomePage() {
                   </label>
                   <select
                     id="form-product"
-                    value={newProduct}
-                    onChange={(e) => setNewProduct(e.target.value as 'Varejofacil' | 'SysPDV')}
-                    className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-900 text-sm focus:ring-2 focus:ring-emerald-500 focus:bg-white focus:outline-none"
+                    value="Varejofacil"
+                    disabled
+                    className="w-full px-4 py-2.5 bg-slate-100 border border-slate-200 rounded-xl text-slate-700 text-sm focus:outline-none cursor-not-allowed font-medium"
                   >
                     <option value="Varejofacil">Varejofacil (Retaguarda / ERP)</option>
-                    <option value="SysPDV">SysPDV (Frente de Loja / PDV)</option>
                   </select>
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    Disponível exclusivamente para o Varejofacil.
+                  </p>
                 </div>
 
                 <div>
@@ -1470,22 +1840,97 @@ export default function HomePage() {
                 <label className="block text-xs font-bold text-slate-700 mb-1.5">
                   3. Insumos e Evidências (PDFs, Planilhas Excel, Telas)
                 </label>
-                <div className="border-2 border-dashed border-slate-300 hover:border-emerald-500 rounded-2xl p-6 text-center bg-slate-50/70 hover:bg-emerald-50/30 transition-all">
+                <div
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    if (e.dataTransfer.files) {
+                      const MAX_SIZE = 2 * 1024 * 1024; // 2MB
+                      const selected = Array.from(e.dataTransfer.files);
+                      const valid: File[] = [];
+                      const invalidExt: File[] = [];
+                      const oversized: File[] = [];
+
+                      selected.forEach((f) => {
+                        if (!isAllowedFileExtension(f.name)) {
+                          invalidExt.push(f);
+                        } else if (f.size > MAX_SIZE) {
+                          oversized.push(f);
+                        } else {
+                          valid.push(f);
+                        }
+                      });
+
+                      if (invalidExt.length > 0) {
+                        showToast(
+                          invalidExt.length === 1
+                            ? `O arquivo "${invalidExt[0].name}" possui formato inválido. Permitidos: .xlsx, .csv, .pdf, .png, .jpg.`
+                            : `${invalidExt.length} arquivo(s) foram ignorados por formato não permitido (.xlsx, .csv, .pdf, .png, .jpg).`
+                        );
+                      }
+
+                      if (oversized.length > 0) {
+                        showToast(
+                          oversized.length === 1
+                            ? `O arquivo "${oversized[0].name}" excede o tamanho máximo de 2MB.`
+                            : `${oversized.length} arquivo(s) foram ignorados por excederem o limite de 2MB.`
+                        );
+                      }
+
+                      setNewFiles((prev) => [...prev, ...valid]);
+                    }
+                  }}
+                  className="border-2 border-dashed border-slate-300 hover:border-emerald-500 rounded-2xl p-6 text-center bg-slate-50/70 hover:bg-emerald-50/30 transition-all"
+                >
                   <FileText className="w-8 h-8 text-emerald-600/70 mx-auto mb-2" />
                   <p className="text-xs text-slate-700 font-semibold">
                     Arraste arquivos ou clique para selecionar
                   </p>
                   <p className="text-[11px] text-slate-500 mt-0.5">
-                    Formatos: .xlsx, .csv, .pdf, .png, .jpg (Até 15MB)
+                    Formatos permitidos: .xlsx, .csv, .pdf, .png, .jpg (Tamanho máximo: 2MB por arquivo)
                   </p>
                   <input
                     type="file"
                     id="input-new-files"
                     multiple
+                    accept=".xlsx,.csv,.pdf,.png,.jpg,.jpeg"
                     className="hidden"
                     onChange={(e) => {
                       if (e.target.files) {
-                        setNewFiles(Array.from(e.target.files));
+                        const MAX_SIZE = 2 * 1024 * 1024; // 2MB
+                        const selected = Array.from(e.target.files);
+                        const valid: File[] = [];
+                        const invalidExt: File[] = [];
+                        const oversized: File[] = [];
+
+                        selected.forEach((f) => {
+                          if (!isAllowedFileExtension(f.name)) {
+                            invalidExt.push(f);
+                          } else if (f.size > MAX_SIZE) {
+                            oversized.push(f);
+                          } else {
+                            valid.push(f);
+                          }
+                        });
+
+                        if (invalidExt.length > 0) {
+                          showToast(
+                            invalidExt.length === 1
+                              ? `O arquivo "${invalidExt[0].name}" possui formato inválido. Permitidos: .xlsx, .csv, .pdf, .png, .jpg.`
+                              : `${invalidExt.length} arquivo(s) foram ignorados por formato não permitido (.xlsx, .csv, .pdf, .png, .jpg).`
+                          );
+                        }
+
+                        if (oversized.length > 0) {
+                          showToast(
+                            oversized.length === 1
+                              ? `O arquivo "${oversized[0].name}" excede o tamanho máximo de 2MB.`
+                              : `${oversized.length} arquivo(s) foram ignorados por excederem o limite de 2MB.`
+                          );
+                        }
+
+                        setNewFiles((prev) => [...prev, ...valid]);
+                        e.target.value = '';
                       }
                     }}
                   />
@@ -1499,18 +1944,26 @@ export default function HomePage() {
 
                 {newFiles.length > 0 && (
                   <div id="new-files-preview" className="mt-3 space-y-1.5">
-                    {newFiles.map((f) => (
+                    {newFiles.map((f, idx) => (
                       <div
-                        key={f.name}
+                        key={`${f.name}-${idx}`}
                         className="flex items-center justify-between px-3.5 py-2 bg-emerald-50/60 rounded-xl text-xs border border-emerald-100"
                       >
                         <div className="flex items-center gap-2 truncate">
-                          <Paperclip className="w-3.5 h-3.5 text-emerald-600" />
+                          <Paperclip className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                           <span className="text-slate-800 font-medium truncate">{f.name}</span>
-                          <span className="text-slate-500 text-[10px]">
+                          <span className="text-slate-500 text-[10px] shrink-0">
                             ({(f.size / 1024).toFixed(0)} KB)
                           </span>
                         </div>
+                        <button
+                          type="button"
+                          onClick={() => setNewFiles((prev) => prev.filter((_, i) => i !== idx))}
+                          className="text-slate-400 hover:text-rose-600 p-1 rounded-md transition-colors cursor-pointer"
+                          title="Remover anexo"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
                       </div>
                     ))}
                   </div>
@@ -1521,16 +1974,27 @@ export default function HomePage() {
                 <button
                   type="button"
                   onClick={() => setActiveTab('board')}
-                  className="px-4 py-2.5 text-xs font-semibold text-slate-500 hover:text-slate-800 rounded-xl transition-colors cursor-pointer"
+                  disabled={submittingIdea}
+                  className="px-4 py-2.5 text-xs font-semibold text-slate-500 hover:text-slate-800 rounded-xl transition-colors cursor-pointer disabled:opacity-50"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
-                  className="px-6 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold rounded-xl shadow-md shadow-emerald-600/20 flex items-center gap-2 transition-all cursor-pointer"
+                  disabled={submittingIdea}
+                  className="px-6 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold rounded-xl shadow-md shadow-emerald-600/20 flex items-center gap-2 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <Send className="w-4 h-4" />
-                  <span>Submeter para Avaliação</span>
+                  {submittingIdea ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Enviando para avaliação...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Send className="w-4 h-4" />
+                      <span>Submeter para Avaliação</span>
+                    </>
+                  )}
                 </button>
               </div>
             </form>
@@ -1554,21 +2018,27 @@ export default function HomePage() {
             </div>
 
             <div className="space-y-4">
-              <h3 className="text-sm font-bold text-slate-700 flex items-center gap-2">
-                <span>Ideias Aguardando Curadoria</span>
-                <span className="px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 text-xs font-bold">
-                  {ideas.filter((i) => i.status === 'pending_review').length}
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                  <span>Ideias Aguardando Curadoria</span>
+                  <span className="px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 text-xs font-bold">
+                    {triageIdeas.length}
+                  </span>
+                  {triageLoading && (
+                    <Loader2 className="w-4 h-4 text-amber-600 animate-spin" />
+                  )}
+                </h3>
+                <span className="text-[11px] text-slate-400 font-medium">
+                  Exibindo demandas cadastradas no Supabase
                 </span>
-              </h3>
+              </div>
 
-              {ideas.filter((i) => i.status === 'pending_review').length === 0 ? (
+              {triageIdeas.length === 0 ? (
                 <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center text-slate-400 text-xs">
-                  Não há novas ideias pendentes de triagem no momento. Fila zerada!
+                  {triageLoading ? 'Consultando ideias no Supabase...' : 'Não há novas ideias pendentes de triagem no momento. Fila zerada!'}
                 </div>
               ) : (
-                ideas
-                  .filter((i) => i.status === 'pending_review')
-                  .map((idea) => (
+                triageIdeas.map((idea) => (
                     <div
                       key={idea.id}
                       className="bg-white border border-amber-200 rounded-3xl p-5 sm:p-6 shadow-sm space-y-4"
@@ -1604,7 +2074,7 @@ export default function HomePage() {
                           </button>
 
                           <button
-                            onClick={() => rejectIdea(idea.id)}
+                            onClick={() => openRejectModal(idea.id)}
                             className="px-3 py-2 bg-slate-100 hover:bg-rose-50 hover:text-rose-600 text-slate-600 border border-slate-200 rounded-xl text-xs font-semibold transition-colors cursor-pointer"
                           >
                             <X className="w-4 h-4" />
@@ -2254,6 +2724,24 @@ export default function HomePage() {
 
               {/* Content */}
               <div className="p-5 sm:p-6 space-y-5 overflow-y-auto flex-1 text-xs">
+                {/* Alerta de Demanda Recusada */}
+                {selectedIdeaDetails.status === 'rejected' && (
+                  <div className="bg-rose-50 border border-rose-200 p-4 rounded-2xl space-y-2">
+                    <div className="flex items-center gap-2 font-bold text-rose-800 text-xs">
+                      <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                      <span>Demanda Recusada pela Curadoria CM</span>
+                    </div>
+                    <div>
+                      <span className="text-[11px] font-bold text-rose-700 block mb-0.5">
+                        Motivo da Recusa:
+                      </span>
+                      <p className="text-slate-800 text-xs bg-white/90 p-3 rounded-xl border border-rose-100 leading-relaxed font-medium">
+                        {getRejectionReason(selectedIdeaDetails)}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
                 {/* Dor na Operação */}
                 <div className="bg-rose-50/50 p-4 rounded-2xl border border-rose-100 space-y-1.5">
                   <div className="flex items-center gap-1.5 font-bold text-rose-700 uppercase tracking-wider text-[11px]">
@@ -2323,11 +2811,17 @@ export default function HomePage() {
                 <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 flex items-center justify-between">
                   <div>
                     <div className="font-bold text-slate-800">
-                      {user?.role === 'admin' ? 'Apoio da Comunidade Varejista:' : 'Sua opinião como parceiro:'}
+                      {user?.role === 'admin'
+                        ? 'Apoio da Comunidade Varejista:'
+                        : isIdeaAuthor(selectedIdeaDetails)
+                        ? 'Sua ideia:'
+                        : 'Sua opinião como parceiro:'}
                     </div>
                     <div className="text-slate-500 text-[11px]">
                       {user?.role === 'admin'
                         ? 'Contagem consolidada de votos para priorização'
+                        : isIdeaAuthor(selectedIdeaDetails)
+                        ? 'Você cadastrou esta ideia. Autores não podem votar na própria demanda.'
                         : 'Essa melhoria também ajudaria a sua loja?'}
                     </div>
                   </div>
@@ -2336,6 +2830,20 @@ export default function HomePage() {
                     <div className="text-xs font-bold px-3 py-1.5 bg-white border border-slate-200 rounded-xl text-slate-700 flex items-center gap-1.5">
                       <ThumbsUp className="w-3.5 h-3.5 text-slate-500" />
                       <span>{calculateScore(selectedIdeaDetails.votes)} votos (Modo visualização)</span>
+                    </div>
+                  ) : isIdeaAuthor(selectedIdeaDetails) ? (
+                    <div className="flex items-center gap-2">
+                      <div
+                        className="text-xs font-semibold px-3 py-1.5 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 flex items-center gap-1.5 select-none"
+                        title="Você cadastrou esta ideia e não pode votar na sua própria demanda"
+                      >
+                        <ThumbsUp className="w-3.5 h-3.5 text-amber-600" />
+                        <span className="font-bold text-slate-800">{calculateScore(selectedIdeaDetails.votes)}</span>
+                        <span>{Math.abs(calculateScore(selectedIdeaDetails.votes)) === 1 ? 'voto' : 'votos'}</span>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-bold border border-amber-200 ml-1">
+                          Autor (Voto não permitido)
+                        </span>
+                      </div>
                     </div>
                   ) : selectedIdeaDetails.status === 'voting' ? (
                     <div className="flex items-center gap-2">
@@ -2414,10 +2922,22 @@ export default function HomePage() {
                           <span>{detailsCommentFile || 'Anexar documento auxiliar'}</span>
                           <input
                             type="file"
+                            accept=".xlsx,.csv,.pdf,.png,.jpg,.jpeg"
                             className="hidden"
                             onChange={(e) => {
                               if (e.target.files && e.target.files[0]) {
-                                setDetailsCommentFile(e.target.files[0].name);
+                                const file = e.target.files[0];
+                                if (!isAllowedFileExtension(file.name)) {
+                                  showToast('Formato não permitido. Formatos aceitos: .xlsx, .csv, .pdf, .png, .jpg');
+                                  e.target.value = '';
+                                  return;
+                                }
+                                if (file.size > 2 * 1024 * 1024) {
+                                  showToast('O arquivo excede o tamanho máximo de 2MB.');
+                                  e.target.value = '';
+                                  return;
+                                }
+                                setDetailsCommentFile(file.name);
                               }
                             }}
                           />
@@ -2550,10 +3070,22 @@ export default function HomePage() {
                         <span className="truncate">{drawerCommentFile || 'Anexar documento auxiliar'}</span>
                         <input
                           type="file"
+                          accept=".xlsx,.csv,.pdf,.png,.jpg,.jpeg"
                           className="hidden"
                           onChange={(e) => {
                             if (e.target.files && e.target.files[0]) {
-                              setDrawerCommentFile(e.target.files[0].name);
+                              const file = e.target.files[0];
+                              if (!isAllowedFileExtension(file.name)) {
+                                showToast('Formato não permitido. Formatos aceitos: .xlsx, .csv, .pdf, .png, .jpg');
+                                e.target.value = '';
+                                return;
+                              }
+                              if (file.size > 2 * 1024 * 1024) {
+                                showToast('O arquivo excede o tamanho máximo de 2MB.');
+                                e.target.value = '';
+                                return;
+                              }
+                              setDrawerCommentFile(file.name);
                             }
                           }}
                         />
@@ -2842,6 +3374,93 @@ export default function HomePage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* REJECT WITH MANDATORY COMMENT MODAL */}
+      {rejectModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white border border-slate-200 rounded-3xl max-w-lg w-full p-6 space-y-4 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2 text-rose-700">
+                <div className="w-9 h-9 rounded-xl bg-rose-50 text-rose-700 flex items-center justify-center border border-rose-200">
+                  <AlertCircle className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">Recusar e Devolver Demanda</h3>
+                  <p className="text-[11px] text-slate-500">
+                    A justificativa é obrigatória e a ideia retornará para o usuário autor.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  if (!rejectSubmitting) {
+                    setRejectModalOpen(false);
+                    setRejectIdeaId(null);
+                  }
+                }}
+                className="text-slate-400 hover:text-slate-700 p-1 rounded-lg cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {rejectError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl font-medium flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{rejectError}</span>
+              </div>
+            )}
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                Motivo da Recusa / Orientações de Ajuste <span className="text-rose-600">*</span>
+              </label>
+              <textarea
+                rows={4}
+                required
+                autoFocus
+                value={rejectionReasonInput}
+                onChange={(e) => {
+                  setRejectionReasonInput(e.target.value);
+                  if (rejectError) setRejectError('');
+                }}
+                placeholder="Explique detalhadamente ao usuário por que a ideia foi recusada ou quais ajustes/insumos faltam para que ela seja aprovada..."
+                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-900 text-xs focus:ring-2 focus:ring-rose-500 focus:bg-white focus:outline-none transition-all"
+              />
+              <span className="text-[11px] text-slate-400 mt-1 block">
+                O autor poderá visualizar esta justificativa na aba &quot;Minhas Ideias&quot;.
+              </span>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                disabled={rejectSubmitting}
+                onClick={() => {
+                  setRejectModalOpen(false);
+                  setRejectIdeaId(null);
+                }}
+                className="px-4 py-2 text-xs font-semibold text-slate-500 hover:text-slate-800 rounded-xl transition-colors cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={rejectSubmitting}
+                onClick={handleConfirmReject}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 transition-all shadow-xs cursor-pointer disabled:opacity-70 disabled:cursor-not-allowed"
+              >
+                {rejectSubmitting ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <X className="w-4 h-4" />
+                )}
+                <span>{rejectSubmitting ? 'Registrando...' : 'Confirmar Recusa'}</span>
+              </button>
+            </div>
           </div>
         </div>
       )}
