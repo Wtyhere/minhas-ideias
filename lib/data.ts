@@ -75,8 +75,11 @@ export const INITIAL_IDEAS: Idea[] = [
     attachments: [
       { name: 'procedimento_envelope_cego.pdf', size: '890 KB' }
     ],
-    status: 'pending_review',
-    votes: {},
+    status: 'voting',
+    votes: {
+      'usuario@cm.com.br': 1,
+      'cliente_a@cm.com.br': 1
+    },
     comments: []
   },
   {

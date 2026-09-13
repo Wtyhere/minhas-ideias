@@ -63,3 +63,64 @@ create or replace trigger on_auth_user_created
 -- Adicionar a coluna para solicitar a troca da senha na tabela profiles
 ALTER TABLE public.profiles 
 ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT true;
+
+-- ─── TABELA DE IDEIAS ────────────────────────────────────────────────────────
+create table if not exists public.ideas (
+  id text default gen_random_uuid()::text primary key,
+  user_id uuid references auth.users(id) on delete set null,
+  title text not null,
+  product text not null check (product in ('Varejofacil', 'SysPDV')),
+  category text not null,
+  company text not null,
+  author_name text not null,
+  author_email text not null,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
+  cycle text not null,
+  pain_description text not null,
+  current_workaround text not null,
+  attachments jsonb default '[]'::jsonb not null,
+  status text default 'pending_review' check (status in (
+    'pending_review',
+    'voting',
+    'in_immersion',
+    'in_development',
+    'in_validation',
+    'in_pilot',
+    'delivered',
+    'merged',
+    'rejected'
+  )),
+  delivered_build text,
+  merged_into_id text references public.ideas(id) on delete set null,
+  votes jsonb default '{}'::jsonb not null,
+  comments jsonb default '[]'::jsonb not null
+);
+
+-- Habilitar Row Level Security (RLS)
+alter table public.ideas enable row level security;
+
+-- Políticas de RLS para ideas
+create policy "Todos os usuários podem visualizar ideias"
+  on public.ideas for select
+  using (true);
+
+create policy "Usuários podem cadastrar ideias"
+  on public.ideas for insert
+  with check (true);
+
+create policy "Usuários podem atualizar suas próprias ideias ou admins atualizam todas"
+  on public.ideas for update
+  using (auth.uid() = user_id or public.is_admin());
+
+-- Storage Bucket para arquivos/anexos das ideias
+insert into storage.buckets (id, name, public)
+values ('files', 'files', true)
+on conflict (id) do update set public = true;
+
+create policy "Anexos públicos para visualização e download"
+  on storage.objects for select
+  using (bucket_id = 'files');
+
+create policy "Usuários podem enviar anexos para ideias"
+  on storage.objects for insert
+  with check (bucket_id = 'files');
