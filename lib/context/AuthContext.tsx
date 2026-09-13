@@ -56,6 +56,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       setUser(data.user);
+      console.log(data.user)
       return { success: true };
     } catch {
       return {

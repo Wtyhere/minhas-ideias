@@ -13,12 +13,25 @@ create table if not exists public.profiles (
 -- Habilitar Row Level Security (RLS)
 alter table public.profiles enable row level security;
 
+-- Função auxiliar SECURITY DEFINER para verificar se o usuário atual é admin.
+-- Usar security definer faz a função rodar com os privilégios do criador,
+-- bypassando o RLS da tabela profiles e evitando recursão infinita.
+create or replace function public.is_admin()
+returns boolean
+language sql
+security definer
+stable
+as $$
+  select exists (
+    select 1 from public.profiles
+    where id = auth.uid() and role = 'admin'
+  );
+$$;
+
 -- Políticas de RLS
 create policy "Usuários podem ler seus próprios dados ou admins leem todos"
   on public.profiles for select
-  using (auth.uid() = id or exists (
-    select 1 from public.profiles where id = auth.uid() and role = 'admin'
-  ));
+  using (auth.uid() = id or public.is_admin());
 
 create policy "Usuários podem atualizar seus próprios dados"
   on public.profiles for update
@@ -36,7 +49,8 @@ begin
     new.raw_user_meta_data->>'cnpj',
     coalesce(new.raw_user_meta_data->>'unit', 'Supermercado Parceiro'),
     coalesce(new.raw_user_meta_data->>'role', case when new.email in ('admin@cm.com.br', 'adrmin@cm.com.br') then 'admin' else 'user' end),
-    coalesce(new.raw_user_meta_data->>'status', 'active')
+    coalesce(new.raw_user_meta_data->>'status', 'active'),
+    coalesce((new.raw_user_meta_data->>'must_change_password')::boolean, true)
   );
   return new;
 end;
@@ -45,3 +59,7 @@ $$ language plpgsql security definer;
 create or replace trigger on_auth_user_created
   after insert on auth.users
   for each row execute function public.handle_new_user();
+
+-- Adicionar a coluna para solicitar a troca da senha na tabela profiles
+ALTER TABLE public.profiles 
+ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT true;

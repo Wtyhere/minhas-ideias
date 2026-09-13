@@ -7,6 +7,7 @@ export interface User {
   createdAt: string;
   cnpj?: string;
   unit?: string;
+  mustChangePassword?: boolean;
 }
 
 export interface LoginCredentials {

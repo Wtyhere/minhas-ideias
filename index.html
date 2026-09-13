@@ -268,7 +268,7 @@
       const registeredUser = state.users.find(u => u.email.toLowerCase() === cleanEmail);
 
       if (registeredUser && registeredUser.status === 'inactive') {
-        showToast('Acesso bloqueado: Este usuário está marcado como Inativo.');
+        showToast('Acesso bloqueado: Este usuário está Inativo.');
         return;
       }
 

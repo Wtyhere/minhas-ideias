@@ -76,15 +76,12 @@ export async function POST(request: Request) {
       if (profile && profile.status === 'inactive') {
         await supabase.auth.signOut();
         return NextResponse.json(
-          { success: false, error: 'Acesso bloqueado: Este usuário está marcado como Inativo.' },
+          { success: false, error: 'Acesso bloqueado: Este usuário está Inativo.' },
           { status: 403 }
         );
       }
 
-      const isAdmin =
-        cleanEmail === 'admin@cm.com.br' ||
-        cleanEmail === 'adrmin@cm.com.br' ||
-        profile?.role === 'admin';
+      const isAdmin = profile?.role === 'admin';
 
       const userObj: User = {
         id: data.user.id,
@@ -109,6 +106,7 @@ export async function POST(request: Request) {
           profile?.created_at ||
           data.user.created_at ||
           new Date().toISOString().split('T')[0],
+        mustChangePassword: profile?.must_change_password ?? false,
       };
 
       const cookieStore = await cookies();
