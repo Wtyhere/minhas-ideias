@@ -45,7 +45,7 @@ import { useAuth } from '@/lib/context/AuthContext';
 import { Idea, Comment, IdeaStatus } from '@/types/idea';
 import { User } from '@/types/auth';
 import { INITIAL_IDEAS } from '@/lib/data';
-import { INITIAL_USERS } from '@/lib/auth';
+import ChangePasswordModal from '../app/components/ChangePassWordModal';
 
 interface ToastItem {
   id: number;
@@ -59,7 +59,9 @@ export default function HomePage() {
 
   // State matching index.html
   const [ideas, setIdeas] = useState<Idea[]>(INITIAL_IDEAS);
-  const [users, setUsers] = useState<User[]>(INITIAL_USERS);
+  const [users, setUsers] = useState<User[]>([]);
+  const [usersLoading, setUsersLoading] = useState(false);
+  const [usersFetched, setUsersFetched] = useState(false);
   const [activeTab, setActiveTab] = useState<'board' | 'new-idea' | 'admin-review' | 'prioritization' | 'users'>('board');
   const [statusTab, setStatusTab] = useState<'disponiveis' | 'desenvolvimento' | 'entregues'>('disponiveis');
   const [selectedProduct, setSelectedProduct] = useState<'TODOS' | 'Varejofacil' | 'SysPDV'>('TODOS');
@@ -87,6 +89,11 @@ export default function HomePage() {
   const [modalUserEmail, setModalUserEmail] = useState('');
   const [modalUserRole, setModalUserRole] = useState<'admin' | 'user'>('user');
   const [modalUserStatus, setModalUserStatus] = useState<'active' | 'inactive'>('active');
+  const [modalUserPassword, setModalUserPassword] = useState('');
+  const [modalUserUnit, setModalUserUnit] = useState('');
+  const [modalSubmitting, setModalSubmitting] = useState(false);
+  const [showModalPassword, setShowModalPassword] = useState(false);
+  const [modalUserError, setModalUserError] = useState('');
 
   // New Idea Form fields
   const [newTitle, setNewTitle] = useState<string>('');
@@ -133,6 +140,57 @@ export default function HomePage() {
       }, 300);
     }, 3500);
   };
+
+  // Função para lidar com a atualização da senha obrigatória
+  const handleUpdatePassword = async (newPassword: string) => {
+    try {
+      const res = await fetch('/api/users/update-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: user?.email, newPassword }),
+      });
+      const data = await res.json();
+
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Não foi possível atualizar a senha.');
+      }
+
+      showToast('Senha atualizada com sucesso! Bem-vindo.');
+      
+      // Força a atualização do estado local do usuário para remover a flag mustChangePassword
+      // Dependendo de como seu AuthContext funciona, você pode chamar um refreshUser() ou atualizar manualmente:
+      window.location.reload(); 
+    } catch (err: any) {
+      throw err;
+    }
+  };
+
+  // Busca usuários do Supabase ao acessar a aba de usuários
+  useEffect(() => {
+    if (activeTab !== 'users' || user?.role !== 'admin' || usersFetched) return;
+
+    async function fetchUsers() {
+      setUsersLoading(true);
+      try {
+        const res = await fetch('/api/users');
+        const data = await res.json();
+        if (data.success && Array.isArray(data.users)) {
+          setUsers(data.users);
+        } else {
+          showToast('Erro ao carregar usuários: ' + (data.error || 'resposta inválida'));
+        }
+      } catch (err) {
+        console.error('Erro ao buscar usuários:', err);
+        showToast('Não foi possível carregar a lista de usuários.');
+      } finally {
+        setUsersLoading(false);
+        setUsersFetched(true);
+      }
+    }
+
+    fetchUsers();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, user?.role]);
 
   const calculateScore = (votes: Record<string, number> = {}) => {
     return Object.values(votes).reduce((acc, val) => acc + val, 0);
@@ -331,7 +389,7 @@ export default function HomePage() {
   const handleExecuteLogin = async (email: string, pass: string) => {
     const res = await login({ email, password: pass });
     if (!res.success) {
-      showToast(res.error || 'Acesso bloqueado: Este usuário está marcado como Inativo.');
+      showToast(res.error || 'Acesso bloqueado: Este usuário está Inativo.');
       return;
     }
     const cleanEmail = (email || '').trim().toLowerCase();
@@ -359,6 +417,7 @@ export default function HomePage() {
         setModalUserEmail(u.email);
         setModalUserRole(u.role);
         setModalUserStatus(u.status);
+        setModalUserUnit(u.unit || '');
       }
     } else {
       setModalUserName('');
@@ -366,13 +425,21 @@ export default function HomePage() {
       setModalUserEmail('');
       setModalUserRole('user');
       setModalUserStatus('active');
+      setModalUserUnit('');
     }
+    setModalUserPassword('');
+    setShowModalPassword(false);
+    setModalUserError('');
     setUserModalOpen(true);
   };
 
   const handleCloseUserModal = () => {
+    if (modalSubmitting) return;
     setEditingUserId(null);
     setUserModalOpen(false);
+    setModalUserPassword('');
+    setShowModalPassword(false);
+    setModalUserError('');
   };
 
   const handleCnpjMask = (val: string) => {
@@ -391,67 +458,167 @@ export default function HomePage() {
     setModalUserCnpj(value);
   };
 
-  const toggleUserStatus = (userId: string) => {
+  const toggleUserStatus = async (userId: string) => {
     const targetUser = users.find((u) => u.id === userId);
     if (!targetUser) return;
 
-    if (user && user.email === targetUser.email) {
+    if (user && user.id === userId) {
       showToast('Não é permitido inativar seu próprio usuário conectado!');
       return;
     }
 
     const nextStatus = targetUser.status === 'active' ? 'inactive' : 'active';
+
+    // Se estiver ativando, valida se já não existe outro usuário ativo com o mesmo CNPJ
+    if (nextStatus === 'active' && targetUser.cnpj) {
+      const cleanCnpjDigits = targetUser.cnpj.replace(/\D/g, '');
+      const ALLOWED_DUPLICATE_CNPJ = '07128945000132';
+
+      if (cleanCnpjDigits !== ALLOWED_DUPLICATE_CNPJ) {
+        const activeCnpjExists = users.some(
+          (u) => u.id !== userId && u.cnpj && u.cnpj.replace(/\D/g, '') === cleanCnpjDigits && u.status === 'active'
+        );
+
+        if (activeCnpjExists) {
+          showToast('Já existe um usuário ativo cadastrado com este CNPJ.');
+          return;
+        }
+      }
+    }
+
+    // Otimista: atualiza UI imediatamente
     setUsers((prev) =>
       prev.map((u) => (u.id === userId ? { ...u, status: nextStatus } : u))
     );
-    showToast(`Usuário ${targetUser.name} agora está ${nextStatus === 'active' ? 'Ativo' : 'Inativo'}.`);
+
+    try {
+      const res = await fetch(`/api/users/${userId}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: nextStatus }),
+      });
+      const data = await res.json();
+
+      if (!res.ok || !data.success) {
+        // Reverte em caso de erro
+        setUsers((prev) =>
+          prev.map((u) => (u.id === userId ? { ...u, status: targetUser.status } : u))
+        );
+        showToast(`Erro ao alterar status: ${data.error || 'Tente novamente.'}`);
+      } else {
+        showToast(
+          `Usuário ${targetUser.name} agora está ${nextStatus === 'active' ? 'Ativo' : 'Inativo'}.`
+        );
+      }
+    } catch {
+      setUsers((prev) =>
+        prev.map((u) => (u.id === userId ? { ...u, status: targetUser.status } : u))
+      );
+      showToast('Não foi possível conectar ao servidor. Tente novamente.');
+    }
   };
 
-  const handleSaveUser = (e: React.FormEvent) => {
+  const handleSaveUser = async (e: React.FormEvent) => {
     e.preventDefault();
+    setModalUserError('');
+
     if (!modalUserName.trim() || !modalUserCnpj.trim() || !modalUserEmail.trim()) {
-      showToast('Por favor, preencha todos os campos obrigatórios!');
+      setModalUserError('Por favor, preencha todos os campos obrigatórios!');
       return;
     }
 
     const cleanEmail = modalUserEmail.trim().toLowerCase();
+    const cleanCnpjDigits = modalUserCnpj.replace(/\D/g, '');
+    const ALLOWED_DUPLICATE_CNPJ = '07128945000132';
 
-    if (editingUserId) {
-      setUsers((prev) =>
-        prev.map((u) => {
-          if (u.id !== editingUserId) return u;
-          return {
-            ...u,
-            name: modalUserName.trim(),
-            cnpj: modalUserCnpj.trim(),
-            email: cleanEmail,
-            role: modalUserRole,
-            status: modalUserStatus,
-          };
-        })
-      );
-      showToast(`Usuário ${modalUserName} atualizado com sucesso!`);
-    } else {
+    // Validação de duplicidade preventiva com base nos usuários carregados
+    if (!editingUserId) {
       const emailExists = users.some((u) => u.email.toLowerCase() === cleanEmail);
       if (emailExists) {
-        showToast('Já existe um usuário cadastrado com este e-mail.');
+        setModalUserError('Já existe um usuário cadastrado com este e-mail.');
         return;
       }
 
-      const newUser: User = {
-        id: `usr-${Date.now()}`,
-        name: modalUserName.trim(),
-        cnpj: modalUserCnpj.trim(),
-        email: cleanEmail,
-        role: modalUserRole,
-        status: modalUserStatus,
-        createdAt: new Date().toISOString().split('T')[0],
-      };
-      setUsers((prev) => [newUser, ...prev]);
-      showToast(`Usuário ${modalUserName} cadastrado com sucesso!`);
+      if (cleanCnpjDigits !== ALLOWED_DUPLICATE_CNPJ) {
+        const activeCnpjExists = users.some(
+          (u) => u.cnpj && u.cnpj.replace(/\D/g, '') === cleanCnpjDigits && u.status === 'active'
+        );
+        if (activeCnpjExists) {
+          setModalUserError('Já existe um usuário ativo cadastrado com este CNPJ.');
+          return;
+        }
+      }
+    } else {
+      if (cleanCnpjDigits !== ALLOWED_DUPLICATE_CNPJ && modalUserStatus === 'active') {
+        const activeCnpjExists = users.some(
+          (u) => u.id !== editingUserId && u.cnpj && u.cnpj.replace(/\D/g, '') === cleanCnpjDigits && u.status === 'active'
+        );
+        if (activeCnpjExists) {
+          setModalUserError('Já existe um usuário ativo cadastrado com este CNPJ.');
+          return;
+        }
+      }
     }
 
-    handleCloseUserModal();
+    setModalSubmitting(true);
+
+    try {
+      if (editingUserId) {
+        // ── Edição ──────────────────────────────────────────────────────────
+        const res = await fetch(`/api/users/${editingUserId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: modalUserName.trim(),
+            cnpj: modalUserCnpj.trim(),
+            unit: modalUserUnit.trim(),
+            role: modalUserRole,
+            status: modalUserStatus,
+          }),
+        });
+        const data = await res.json();
+
+        if (!res.ok || !data.success) {
+          setModalUserError(data.error || 'Erro ao salvar alterações.');
+          return;
+        }
+
+        setUsers((prev) =>
+          prev.map((u) => (u.id === editingUserId ? data.user : u))
+        );
+        showToast(`Usuário ${data.user.name} atualizado com sucesso!`);
+      } else {
+        // ── Cadastro ─────────────────────────────────────────────────────────
+        const res = await fetch('/api/users', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: modalUserName.trim(),
+            cnpj: modalUserCnpj.trim(),
+            email: cleanEmail,
+            unit: modalUserUnit.trim(),
+            role: modalUserRole,
+            status: modalUserStatus,
+            password: modalUserPassword.trim() || undefined,
+          }),
+        });
+        const data = await res.json();
+
+        if (!res.ok || !data.success) {
+          setModalUserError(data.error || 'Erro ao cadastrar usuário.');
+          return;
+        }
+
+        setUsers((prev) => [data.user, ...prev]);
+        showToast(`Usuário ${data.user.name} cadastrado com sucesso!`);
+      }
+
+      handleCloseUserModal();
+    } catch {
+      setModalUserError('Não foi possível conectar ao servidor. Tente novamente.');
+    } finally {
+      setModalSubmitting(false);
+    }
   };
 
   // Filter ideas logic matching index.html getFilteredIdeas()
@@ -492,6 +659,7 @@ export default function HomePage() {
   // If user is not authenticated, render pixel perfect login from index.html!
   if (!user && !loading) {
     return (
+      
       <>
         <div id="toast-container" className="fixed bottom-5 right-5 z-50 pointer-events-none space-y-2">
           {toasts.map((t) => (
@@ -563,8 +731,10 @@ export default function HomePage() {
                   />
                   <button
                     type="button"
+                    tabIndex={-1}
                     disabled={isLoading}
                     onClick={() => setShowPassword(!showPassword)}
+                    aria-label={showPassword ? "Ocultar senha" : "Exibir senha"}
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 focus:outline-none transition-colors disabled:opacity-50"
                   >
                     {showPassword ? (
@@ -626,8 +796,16 @@ export default function HomePage() {
     entregues: ideas.filter((i) => i.status === 'delivered').length,
   };
 
+  //console.log(user)
+
   return (
+    
     <div className="flex-1 flex flex-col min-h-screen bg-slate-50/70 text-slate-800 selection:bg-emerald-100 selection:text-emerald-900 font-sans">
+      {/* MODAL DE ALTERAÇÃO DE SENHA OBRIGATÓRIA */}
+      
+      {user?.mustChangePassword && (
+        <ChangePasswordModal onSuccess={handleUpdatePassword} />
+      )}
       {/* TOAST NOTIFICATION CONTAINER */}
       <div id="toast-container" className="fixed bottom-5 right-5 z-50 pointer-events-none space-y-2">
         {toasts.map((t) => (
@@ -1802,13 +1980,24 @@ export default function HomePage() {
                 </p>
               </div>
 
-              <button
-                onClick={() => handleOpenUserModal()}
-                className="px-4 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-2xl text-xs font-bold shadow-md shadow-emerald-600/20 flex items-center justify-center gap-2 transition-all hover:scale-[1.02] shrink-0 cursor-pointer"
-              >
-                <UserPlus className="w-4 h-4" />
-                <span>Cadastrar Novo Usuário</span>
-              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                {/* <button
+                  onClick={() => { setUsersFetched(false); }}
+                  disabled={usersLoading}
+                  className="px-3 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-2xl text-xs font-bold border border-slate-200 flex items-center justify-center gap-1.5 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Recarregar lista do Supabase"
+                >
+                  <Loader2 className={`w-3.5 h-3.5 ${usersLoading ? 'animate-spin' : ''}`} />
+                  <span className="hidden sm:inline">Recarregar</span>
+                </button> */}
+                <button
+                  onClick={() => handleOpenUserModal()}
+                  className="px-4 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-2xl text-xs font-bold shadow-md shadow-emerald-600/20 flex items-center justify-center gap-2 transition-all hover:scale-[1.02] cursor-pointer"
+                >
+                  <UserPlus className="w-4 h-4" />
+                  <span>Cadastrar Novo Usuário</span>
+                </button>
+              </div>
             </div>
 
             {/* Filtros de Busca e Status */}
@@ -1863,6 +2052,12 @@ export default function HomePage() {
 
             {/* Tabela de Usuários */}
             <div className="bg-white border border-slate-200/80 rounded-3xl overflow-hidden shadow-xs">
+              {usersLoading ? (
+                <div className="flex flex-col items-center justify-center py-16 text-slate-400 gap-3">
+                  <Loader2 className="w-8 h-8 animate-spin text-teal-500" />
+                  <span className="text-sm font-medium">Carregando usuários do Supabase...</span>
+                </div>
+              ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs">
                   <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider font-bold border-b border-slate-200">
@@ -1975,7 +2170,28 @@ export default function HomePage() {
                       ))}
                   </tbody>
                 </table>
+                {!usersLoading && users.filter((u) => {
+                  if (userStatusFilter !== 'TODOS' && u.status !== userStatusFilter) return false;
+                  if (userSearchQuery.trim()) {
+                    const q = userSearchQuery.toLowerCase();
+                    return (
+                      (u.name || '').toLowerCase().includes(q) ||
+                      (u.cnpj || '').toLowerCase().includes(q) ||
+                      (u.email || '').toLowerCase().includes(q)
+                    );
+                  }
+                  return true;
+                }).length === 0 && (
+                  <div className="flex flex-col items-center justify-center py-12 text-slate-400 gap-2">
+                    <Users className="w-8 h-8 text-slate-300" />
+                    <span className="text-sm font-medium">Nenhum usuário encontrado.</span>
+                    {userSearchQuery && (
+                      <span className="text-xs text-slate-400">Tente ajustar os filtros ou o termo de busca.</span>
+                    )}
+                  </div>
+                )}
               </div>
+              )}
             </div>
           </div>
         )}
@@ -2508,6 +2724,13 @@ export default function HomePage() {
             </div>
 
             <form id="user-form" onSubmit={handleSaveUser} className="space-y-4 text-xs">
+              {modalUserError && (
+                <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl font-medium flex items-center gap-2.5 animate-in fade-in duration-200">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+                  <span>{modalUserError}</span>
+                </div>
+              )}
+
               <div>
                 <label className="block font-bold text-slate-700 mb-1">
                   Nome do Usuário / Razão Social <span className="text-emerald-600">*</span>
@@ -2599,10 +2822,23 @@ export default function HomePage() {
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold rounded-xl shadow-md shadow-emerald-600/20 text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+                  disabled={modalSubmitting}
+                  className="px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold rounded-xl shadow-md shadow-emerald-600/20 text-xs flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-70 disabled:cursor-not-allowed"
                 >
-                  <Check className="w-4 h-4" />
-                  <span>{editingUserId ? 'Salvar Alterações' : 'Cadastrar Usuário'}</span>
+                  {modalSubmitting ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Check className="w-4 h-4" />
+                  )}
+                  <span>
+                    {modalSubmitting
+                      ? editingUserId
+                        ? 'Salvando...'
+                        : 'Cadastrando...'
+                      : editingUserId
+                      ? 'Salvar Alterações'
+                      : 'Cadastrar Usuário'}
+                  </span>
                 </button>
               </div>
             </form>

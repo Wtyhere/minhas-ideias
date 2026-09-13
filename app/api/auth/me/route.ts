@@ -47,6 +47,7 @@ export async function GET() {
           cnpj: profile?.cnpj || supaUser.user_metadata?.cnpj,
           unit: profile?.unit || supaUser.user_metadata?.unit,
           createdAt: profile?.created_at || supaUser.created_at,
+          mustChangePassword: profile?.must_change_password ?? false,
         };
 
         return NextResponse.json({ authenticated: true, user });

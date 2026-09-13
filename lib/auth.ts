@@ -61,7 +61,7 @@ export function authenticateUser(email: string, password?: string): AuthResponse
   if (registeredUser && registeredUser.status === 'inactive') {
     return {
       success: false,
-      error: 'Acesso bloqueado: Este usuário está marcado como Inativo.',
+      error: 'Acesso bloqueado: Este usuário está Inativo.',
     };
   }
 
