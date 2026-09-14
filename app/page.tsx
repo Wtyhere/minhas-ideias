@@ -11,7 +11,6 @@ import {
   LogOut,
   Calendar,
   ThumbsUp,
-  ThumbsDown,
   Clock,
   CheckCircle2,
   Search,
@@ -262,7 +261,22 @@ export default function HomePage() {
   }, [activeTab]);
 
   const calculateScore = (votes: Record<string, number> = {}) => {
-    return Object.values(votes).reduce((acc, val) => acc + val, 0);
+    return Object.values(votes).filter((val) => val > 0).reduce((acc, val) => acc + val, 0);
+  };
+
+  const getLikeCount = (votes: Record<string, number> = {}) => {
+    return Object.values(votes).filter((val) => val > 0).length;
+  };
+
+  const hasUserLiked = (votes: Record<string, number> = {}, userEmail?: string) => {
+    if (!userEmail) return false;
+    return (votes[userEmail] || 0) > 0;
+  };
+
+  const getLikersList = (votes: Record<string, number> = {}) => {
+    return Object.entries(votes)
+      .filter(([, val]) => val > 0)
+      .map(([email]) => email);
   };
 
   const getStatusLabel = (status: IdeaStatus | string) => {
@@ -317,46 +331,57 @@ export default function HomePage() {
     return false;
   };
 
-  const handleVote = (ideaId: string, value: number) => {
-    if (!user) return;
+  const handleToggleLike = (ideaId: string) => {
+    if (!user) {
+      showToast('Você precisa estar autenticado para curtir uma ideia.');
+      return;
+    }
     if (user.role === 'admin') {
-      showToast('Administradores possuem permissão apenas de visualização dos votos.');
+      showToast('Administradores possuem permissão apenas de visualização das curtidas.');
       return;
     }
 
     const targetIdea = ideas.find((i) => i.id === ideaId);
     if (isIdeaAuthor(targetIdea)) {
-      showToast('Você não pode votar na ideia que você mesmo cadastrou.');
+      showToast('Você não pode curtir a ideia que você mesmo cadastrou.');
       return;
     }
 
-    let updatedVotes: Record<string, number> | null = null;
+    const userEmail = user.email;
+    const currentVotes = targetIdea?.votes || {};
+    const alreadyLiked = (currentVotes[userEmail] || 0) > 0;
+    const newVotes = { ...currentVotes };
 
+    if (alreadyLiked) {
+      delete newVotes[userEmail];
+    } else {
+      newVotes[userEmail] = 1;
+    }
+
+    // Atualização otimista
     setIdeas((prev) =>
       prev.map((idea) => {
         if (idea.id !== ideaId) return idea;
-        const currentVote = idea.votes[user.email];
-        const newVotes = { ...idea.votes };
-        if (currentVote === value) {
-          delete newVotes[user.email];
-        } else {
-          newVotes[user.email] = value;
-        }
-        updatedVotes = newVotes;
         return { ...idea, votes: newVotes };
       })
     );
 
-    // Se a ideia foi cadastrada no Supabase, sincroniza os votos no banco
-    if (targetIdea?.fromSupabase && updatedVotes) {
+    showToast(alreadyLiked ? 'Curtida removida.' : 'Você curtiu esta ideia! 👍');
+
+    // Se a ideia foi cadastrada no Supabase, sincroniza os votos/curtidas no banco
+    if (targetIdea?.fromSupabase) {
       fetch(`/api/ideas/${ideaId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ votes: updatedVotes }),
+        body: JSON.stringify({ votes: newVotes }),
       }).catch((err) => {
-        console.error('Erro ao sincronizar voto no Supabase:', err);
+        console.error('Erro ao sincronizar curtida no Supabase:', err);
       });
     }
+  };
+
+  const handleVote = (ideaId: string, _value: number) => {
+    handleToggleLike(ideaId);
   };
 
   const handleAddComment = (ideaId: string, text: string, attachmentName?: string | null) => {
@@ -1480,6 +1505,9 @@ export default function HomePage() {
             <div className="flex flex-col gap-4">
               {filteredIdeas.map((idea) => {
                 const score = calculateScore(idea.votes);
+                const likeCount = getLikeCount(idea.votes);
+                const hasLiked = hasUserLiked(idea.votes, user?.email);
+                const likers = getLikersList(idea.votes);
                 const userVote = user ? idea.votes[user.email] || 0 : 0;
                 const isSysPDV = idea.product === 'SysPDV';
                 const isAuthor = isIdeaAuthor(idea);
@@ -1611,19 +1639,21 @@ export default function HomePage() {
                           )}
                         </button>
 
-                        {/* Bloco de Votos */}
+                        {/* Bloco de Curtidas (Reação) */}
                         {idea.status === 'voting' ? (
                           user?.role === 'admin' ? (
                             <div
                               className="flex items-center bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 shadow-2xs text-xs text-slate-600 gap-2 select-none"
-                              title="Modo Administrador: votação disponível apenas para visualização"
+                              title={
+                                likers.length > 0
+                                  ? `Curtido por: ${likers.join(', ')}`
+                                  : 'Modo Administrador: visualização das curtidas apenas'
+                              }
                             >
-                              <span className="flex items-center gap-1 text-slate-500">
+                              <span className="flex items-center gap-1.5 text-slate-500">
                                 <ThumbsUp className="w-3.5 h-3.5 text-slate-400" />
-                                <span className="font-bold text-slate-800">
-                                  {score > 0 ? `+${score}` : score}
-                                </span>
-                                <span>votos</span>
+                                <span className="font-bold text-slate-800">{likeCount}</span>
+                                <span>{likeCount === 1 ? 'curtida' : 'curtidas'}</span>
                               </span>
                               <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-200/80 text-slate-600 font-medium">
                                 Apenas leitura
@@ -1632,58 +1662,55 @@ export default function HomePage() {
                           ) : isAuthor ? (
                             <div
                               className="flex items-center bg-amber-50/70 border border-amber-200/80 rounded-xl px-3 py-1.5 shadow-2xs text-xs text-amber-900 gap-2 select-none"
-                              title="Você cadastrou esta ideia e não pode votar na sua própria demanda"
+                              title={
+                                likers.length > 0
+                                  ? `Curtido por: ${likers.join(', ')} (Autores não podem curtir a própria ideia)`
+                                  : 'Você cadastrou esta ideia e não pode curtir a sua própria demanda'
+                              }
                             >
-                              <span className="flex items-center gap-1 text-amber-700">
+                              <span className="flex items-center gap-1.5 text-amber-700">
                                 <ThumbsUp className="w-3.5 h-3.5 text-amber-500" />
-                                <span className="font-bold text-slate-800">
-                                  {score > 0 ? `+${score}` : score}
-                                </span>
-                                <span>{Math.abs(score) === 1 ? 'voto' : 'votos'}</span>
+                                <span className="font-bold text-slate-800">{likeCount}</span>
+                                <span>{likeCount === 1 ? 'curtida' : 'curtidas'}</span>
                               </span>
                               <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-semibold border border-amber-200">
                                 Sua ideia (Autor)
                               </span>
                             </div>
                           ) : (
-                            <div className="flex items-center bg-slate-50 border border-slate-200 rounded-xl p-1 shadow-2xs">
-                              <button
-                                onClick={() => handleVote(idea.id, 1)}
-                                className={`p-1.5 rounded-lg transition-all flex items-center gap-1 text-xs font-bold cursor-pointer ${
-                                  userVote === 1
-                                    ? 'bg-emerald-600 text-white shadow-xs'
-                                    : 'text-slate-600 hover:text-emerald-700 hover:bg-emerald-50'
+                            <button
+                              onClick={() => handleToggleLike(idea.id)}
+                              className={`px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-2xs cursor-pointer group select-none active:scale-95 ${
+                                hasLiked
+                                  ? 'bg-emerald-600 text-white shadow-emerald-600/20 shadow-sm border border-emerald-600'
+                                  : 'bg-slate-50 hover:bg-emerald-50/70 text-slate-700 hover:text-emerald-800 border border-slate-200 hover:border-emerald-200'
+                              }`}
+                              title={
+                                hasLiked
+                                  ? 'Você curtiu esta ideia! Clique para descurtir.'
+                                  : likers.length > 0
+                                  ? `Curtido por: ${likers.join(', ')}. Clique para curtir!`
+                                  : 'Clique para reagir e curtir esta ideia!'
+                              }
+                            >
+                              <ThumbsUp
+                                className={`w-3.5 h-3.5 transition-transform ${
+                                  hasLiked
+                                    ? 'fill-white text-white scale-110'
+                                    : 'text-emerald-600 group-hover:scale-110'
                                 }`}
-                                title="Apoiar ideia (+1)"
-                              >
-                                <ThumbsUp className="w-3.5 h-3.5" />
-                                <span className="hidden sm:inline">Apoiar</span>
-                              </button>
-
+                              />
+                              <span>{hasLiked ? 'Curtido' : 'Curtir'}</span>
                               <span
-                                className={`px-2.5 text-xs font-extrabold ${
-                                  score > 0
-                                    ? 'text-emerald-700'
-                                    : score < 0
-                                    ? 'text-rose-600'
-                                    : 'text-slate-500'
+                                className={`px-1.5 py-0.2 rounded-full text-[10px] font-extrabold ${
+                                  hasLiked
+                                    ? 'bg-emerald-700/60 text-white'
+                                    : 'bg-emerald-100 text-emerald-800'
                                 }`}
                               >
-                                {score > 0 ? `+${score}` : score}
+                                {likeCount}
                               </span>
-
-                              <button
-                                onClick={() => handleVote(idea.id, -1)}
-                                className={`p-1.5 rounded-lg transition-all flex items-center gap-1 text-xs font-bold cursor-pointer ${
-                                  userVote === -1
-                                    ? 'bg-rose-600 text-white shadow-xs'
-                                    : 'text-slate-600 hover:text-rose-600 hover:bg-rose-50'
-                                }`}
-                                title="Discordar (-1)"
-                              >
-                                <ThumbsDown className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
+                            </button>
                           )
                         ) : idea.status === 'rejected' ? (
                           <div className="text-xs text-rose-700 font-bold px-3 py-1.5 bg-rose-50 rounded-xl border border-rose-200 flex items-center gap-1.5">
@@ -1691,8 +1718,13 @@ export default function HomePage() {
                             <span>Recusada</span>
                           </div>
                         ) : (
-                          <div className="text-xs text-slate-500 font-semibold px-3 py-1.5 bg-slate-50 rounded-xl border border-slate-200 flex items-center gap-1">
-                            <span className="text-slate-800 font-bold">{score}</span> votos consolidados
+                          <div
+                            className="text-xs text-slate-600 font-semibold px-3 py-1.5 bg-slate-50 rounded-xl border border-slate-200 flex items-center gap-1.5 select-none"
+                            title={likers.length > 0 ? `Curtido por: ${likers.join(', ')}` : undefined}
+                          >
+                            <ThumbsUp className="w-3.5 h-3.5 text-emerald-600" />
+                            <span className="text-slate-800 font-bold">{likeCount}</span>
+                            <span>{likeCount === 1 ? 'curtida' : 'curtidas'}</span>
                           </div>
                         )}
                       </div>
@@ -2131,7 +2163,7 @@ export default function HomePage() {
             {/* Tabela de Ranking */}
             <div className="bg-white border border-slate-200/80 rounded-3xl p-6 shadow-xs">
               <h3 className="text-sm font-bold text-slate-800 mb-4 flex items-center justify-between">
-                <span>Ranking de Votação Popular (Em Votação)</span>
+                <span>Ranking de Ideias por Curtidas da Comunidade (Em Votação)</span>
                 <span className="text-xs text-slate-500 font-normal">
                   Total de {ideas.filter((i) => i.status === 'voting').length} demanda(s) disputando vaga no ciclo
                 </span>
@@ -2144,7 +2176,7 @@ export default function HomePage() {
                       <th className="py-3 px-4">Posição</th>
                       <th className="py-3 px-4">Sistema</th>
                       <th className="py-3 px-4">Título da Demanda</th>
-                      <th className="py-3 px-4 text-center">Score Líquido</th>
+                      <th className="py-3 px-4 text-center">Total de Curtidas</th>
                       <th className="py-3 px-4">Evidências / Insumos</th>
                       <th className="py-3 px-4 text-right">Ação de Ciclo</th>
                     </tr>
@@ -2182,13 +2214,14 @@ export default function HomePage() {
                             </td>
                             <td className="py-3.5 px-4 text-center">
                               <span
-                                className={`font-bold px-3 py-1 rounded-full text-xs ${
+                                className={`font-bold px-3 py-1 rounded-full text-xs flex items-center justify-center gap-1 mx-auto w-fit ${
                                   score > 0
                                     ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                                     : 'bg-slate-100 text-slate-600'
                                 }`}
                               >
-                                {score > 0 ? `+${score}` : score}
+                                <ThumbsUp className="w-3 h-3 text-emerald-600" />
+                                <span>{score} {score === 1 ? 'curtida' : 'curtidas'}</span>
                               </span>
                             </td>
                             <td className="py-3.5 px-4 text-slate-500">
@@ -2807,74 +2840,114 @@ export default function HomePage() {
                   )}
                 </div>
 
-                {/* Votação */}
-                <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 flex items-center justify-between">
-                  <div>
-                    <div className="font-bold text-slate-800">
-                      {user?.role === 'admin'
-                        ? 'Apoio da Comunidade Varejista:'
-                        : isIdeaAuthor(selectedIdeaDetails)
-                        ? 'Sua ideia:'
-                        : 'Sua opinião como parceiro:'}
-                    </div>
-                    <div className="text-slate-500 text-[11px]">
-                      {user?.role === 'admin'
-                        ? 'Contagem consolidada de votos para priorização'
-                        : isIdeaAuthor(selectedIdeaDetails)
-                        ? 'Você cadastrou esta ideia. Autores não podem votar na própria demanda.'
-                        : 'Essa melhoria também ajudaria a sua loja?'}
-                    </div>
-                  </div>
+                {/* Curtidas & Reação */}
+                {(() => {
+                  const drawerLikeCount = getLikeCount(selectedIdeaDetails.votes);
+                  const drawerHasLiked = hasUserLiked(selectedIdeaDetails.votes, user?.email);
+                  const drawerLikers = getLikersList(selectedIdeaDetails.votes);
+                  const isAuthor = isIdeaAuthor(selectedIdeaDetails);
 
-                  {user?.role === 'admin' ? (
-                    <div className="text-xs font-bold px-3 py-1.5 bg-white border border-slate-200 rounded-xl text-slate-700 flex items-center gap-1.5">
-                      <ThumbsUp className="w-3.5 h-3.5 text-slate-500" />
-                      <span>{calculateScore(selectedIdeaDetails.votes)} votos (Modo visualização)</span>
-                    </div>
-                  ) : isIdeaAuthor(selectedIdeaDetails) ? (
-                    <div className="flex items-center gap-2">
-                      <div
-                        className="text-xs font-semibold px-3 py-1.5 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 flex items-center gap-1.5 select-none"
-                        title="Você cadastrou esta ideia e não pode votar na sua própria demanda"
-                      >
-                        <ThumbsUp className="w-3.5 h-3.5 text-amber-600" />
-                        <span className="font-bold text-slate-800">{calculateScore(selectedIdeaDetails.votes)}</span>
-                        <span>{Math.abs(calculateScore(selectedIdeaDetails.votes)) === 1 ? 'voto' : 'votos'}</span>
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-bold border border-amber-200 ml-1">
-                          Autor (Voto não permitido)
-                        </span>
+                  return (
+                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                      <div>
+                        <div className="font-bold text-slate-800 flex items-center gap-1.5">
+                          <ThumbsUp className="w-4 h-4 text-emerald-600" />
+                          <span>
+                            {user?.role === 'admin'
+                              ? 'Apoio da Comunidade Varejista:'
+                              : isAuthor
+                              ? 'Sua ideia:'
+                              : 'Reação da Comunidade:'}
+                          </span>
+                        </div>
+                        <div className="text-slate-500 text-[11px] mt-0.5">
+                          {user?.role === 'admin'
+                            ? 'Contagem consolidada de curtidas para priorização'
+                            : isAuthor
+                            ? 'Você cadastrou esta ideia. Autores não podem curtir a própria demanda.'
+                            : 'Essa melhoria também ajudaria a sua loja? Deixe sua curtida!'}
+                        </div>
                       </div>
-                    </div>
-                  ) : selectedIdeaDetails.status === 'voting' ? (
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => handleVote(selectedIdeaDetails.id, 1)}
-                        className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
-                          user && selectedIdeaDetails.votes[user.email] === 1
-                            ? 'bg-emerald-600 text-white shadow-xs'
-                            : 'bg-white text-slate-700 border border-slate-200 hover:text-emerald-700'
-                        }`}
-                      >
-                        <ThumbsUp className="w-3.5 h-3.5" />
-                        <span>Sim (+1)</span>
-                      </button>
 
-                      <button
-                        onClick={() => handleVote(selectedIdeaDetails.id, -1)}
-                        className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
-                          user && selectedIdeaDetails.votes[user.email] === -1
-                            ? 'bg-rose-600 text-white shadow-xs'
-                            : 'bg-white text-slate-700 border border-slate-200 hover:text-rose-600'
-                        }`}
-                      >
-                        <ThumbsDown className="w-3.5 h-3.5" />
-                        <span>Não (-1)</span>
-                      </button>
+                      {user?.role === 'admin' ? (
+                        <div
+                          className="text-xs font-bold px-3.5 py-2 bg-white border border-slate-200 rounded-xl text-slate-700 flex items-center gap-2 select-none"
+                          title={drawerLikers.length > 0 ? `Curtido por: ${drawerLikers.join(', ')}` : undefined}
+                        >
+                          <ThumbsUp className="w-3.5 h-3.5 text-slate-400" />
+                          <span>{drawerLikeCount} {drawerLikeCount === 1 ? 'curtida' : 'curtidas'}</span>
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-medium">
+                            Apenas leitura
+                          </span>
+                        </div>
+                      ) : isAuthor ? (
+                        <div className="flex items-center gap-2">
+                          <div
+                            className="text-xs font-semibold px-3.5 py-2 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 flex items-center gap-1.5 select-none"
+                            title={
+                              drawerLikers.length > 0
+                                ? `Curtido por: ${drawerLikers.join(', ')} (Autores não podem curtir a própria ideia)`
+                                : 'Você cadastrou esta ideia e não pode curtir na sua própria demanda'
+                            }
+                          >
+                            <ThumbsUp className="w-3.5 h-3.5 text-amber-600" />
+                            <span className="font-bold text-slate-800">{drawerLikeCount}</span>
+                            <span>{drawerLikeCount === 1 ? 'curtida' : 'curtidas'}</span>
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-bold border border-amber-200 ml-1">
+                              Autor (Não permitido)
+                            </span>
+                          </div>
+                        </div>
+                      ) : selectedIdeaDetails.status === 'voting' ? (
+                        <button
+                          onClick={() => handleToggleLike(selectedIdeaDetails.id)}
+                          className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all shadow-xs cursor-pointer select-none active:scale-95 ${
+                            drawerHasLiked
+                              ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/20'
+                              : 'bg-white hover:bg-emerald-50 text-slate-700 hover:text-emerald-700 border border-slate-200 hover:border-emerald-300'
+                          }`}
+                          title={
+                            drawerHasLiked
+                              ? 'Você curtiu esta ideia! Clique para descurtir.'
+                              : drawerLikers.length > 0
+                              ? `Curtido por: ${drawerLikers.join(', ')}. Clique para curtir!`
+                              : 'Clique para reagir e curtir esta ideia!'
+                          }
+                        >
+                          <ThumbsUp
+                            className={`w-4 h-4 transition-transform ${
+                              drawerHasLiked
+                                ? 'fill-white text-white scale-110'
+                                : 'text-emerald-600'
+                            }`}
+                          />
+                          <span>{drawerHasLiked ? 'Curtido' : 'Curtir Ideia'}</span>
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
+                              drawerHasLiked
+                                ? 'bg-emerald-700/60 text-white'
+                                : 'bg-emerald-100 text-emerald-800'
+                            }`}
+                          >
+                            {drawerLikeCount}
+                          </span>
+                        </button>
+                      ) : (
+                        <div
+                          className="text-xs text-slate-600 font-semibold px-3 py-1.5 bg-white rounded-xl border border-slate-200 flex items-center gap-1.5 select-none"
+                          title={drawerLikers.length > 0 ? `Curtido por: ${drawerLikers.join(', ')}` : undefined}
+                        >
+                          <ThumbsUp className="w-3.5 h-3.5 text-emerald-600" />
+                          <span className="text-slate-800 font-bold">{drawerLikeCount}</span>
+                          <span>{drawerLikeCount === 1 ? 'curtida' : 'curtidas'}</span>
+                          <span className="text-[10px] text-slate-400 font-normal ml-1">
+                            (Votação encerrada)
+                          </span>
+                        </div>
+                      )}
                     </div>
-                  ) : (
-                    <span className="text-xs text-slate-500 font-semibold">Votação encerrada para este item</span>
-                  )}
-                </div>
+                  );
+                })()}
 
                 {/* Comentários */}
                 <div className="border-t border-slate-100 pt-4 space-y-3">
