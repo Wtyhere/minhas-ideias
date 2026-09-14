@@ -391,13 +391,27 @@ export default function HomePage() {
     handleVote(ideaId, 1);
   };
 
-  const handleAddComment = (ideaId: string, text: string, attachmentName?: string | null) => {
-    if (!user) return;
+  const handleAddComment = async (ideaId: string, text: string, attachmentName?: string | null) => {
+    if (!user) {
+      showToast('Você precisa estar autenticado para comentar.');
+      return;
+    }
     if (user.role === 'admin') {
       showToast('Administradores estão em modo de somente leitura para comentários.');
       return;
     }
-    if (!text.trim()) return;
+    if (!text.trim()) {
+      showToast('Por favor, escreva um comentário antes de enviar.');
+      return;
+    }
+
+    const targetIdea = ideas.find((i) => i.id === ideaId);
+    if (!targetIdea) return;
+
+    if (isIdeaAuthor(targetIdea)) {
+      showToast('O usuário que criou a ideia não pode comentar na própria demanda.');
+      return;
+    }
 
     const newComment: Comment = {
       id: `comm-${Date.now()}`,
@@ -408,14 +422,34 @@ export default function HomePage() {
       attachmentName: attachmentName || null,
     };
 
+    const updatedComments = [...targetIdea.comments, newComment];
+
     setIdeas((prev) =>
       prev.map((idea) => {
         if (idea.id !== ideaId) return idea;
-        return { ...idea, comments: [...idea.comments, newComment] };
+        return { ...idea, comments: updatedComments };
       })
     );
 
     showToast('Comentário registrado com sucesso!');
+
+    // Se a ideia foi cadastrada no Supabase, sincroniza os comentários no banco
+    if (targetIdea.fromSupabase) {
+      try {
+        const res = await fetch(`/api/ideas/${ideaId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ comments: updatedComments }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || 'Erro ao sincronizar comentário no banco.');
+        }
+      } catch (err: any) {
+        console.error('Erro ao sincronizar comentário no Supabase:', err);
+        showToast(err.message || 'Erro ao salvar comentário.');
+      }
+    }
   };
 
   const movePipeline = (ideaId: string, nextStatus: IdeaStatus) => {
@@ -1636,11 +1670,15 @@ export default function HomePage() {
                           <span className="px-1.5 py-0.2 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-extrabold">
                             {idea.comments.length}
                           </span>
-                          {user?.role === 'admin' && (
+                          {user?.role === 'admin' ? (
                             <span className="text-[10px] text-slate-400 font-normal hidden sm:inline">
                               (Apenas leitura)
                             </span>
-                          )}
+                          ) : isAuthor ? (
+                            <span className="text-[10px] text-amber-600 font-normal hidden sm:inline">
+                              (Autor: leitura)
+                            </span>
+                          ) : null}
                         </button>
 
                         {/* Bloco de Reações (Joinha Positivo / Negativo) */}
@@ -3042,7 +3080,25 @@ export default function HomePage() {
                     )}
                   </div>
 
-                  {user?.role !== 'admin' && (
+                  {user?.role === 'admin' ? (
+                    <div className="p-3 bg-amber-50/80 border border-amber-200 rounded-xl text-center">
+                      <p className="text-xs font-semibold text-amber-900">
+                        Modo Administrador: Apenas visualização de comentários
+                      </p>
+                    </div>
+                  ) : isIdeaAuthor(selectedIdeaDetails) ? (
+                    <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-2xl flex items-center gap-2.5">
+                      <AlertCircle className="w-5 h-5 text-amber-600 shrink-0" />
+                      <div>
+                        <p className="text-xs font-bold text-amber-900">
+                          Comentários desabilitados para o autor
+                        </p>
+                        <p className="text-[11px] text-amber-700 mt-0.5">
+                          Você cadastrou esta demanda. O espaço de comentários é destinado à colaboração dos outros parceiros.
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
                     <div className="pt-2 space-y-2">
                       <textarea
                         id="details-comment-text"
@@ -3189,6 +3245,18 @@ export default function HomePage() {
                     <p className="text-[11px] text-amber-700 mt-0.5">
                       A publicação de comentários é restrita à comunidade de supermercadistas.
                     </p>
+                  </div>
+                ) : isIdeaAuthor(commentsDrawerIdea) ? (
+                  <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-2xl flex items-center gap-2.5">
+                    <AlertCircle className="w-5 h-5 text-amber-600 shrink-0" />
+                    <div>
+                      <p className="text-xs font-bold text-amber-900">
+                        Comentários desabilitados para o autor
+                      </p>
+                      <p className="text-[11px] text-amber-700 mt-0.5">
+                        Você cadastrou esta demanda. O espaço de comentários é destinado à colaboração dos outros parceiros.
+                      </p>
+                    </div>
                   </div>
                 ) : (
                   <>

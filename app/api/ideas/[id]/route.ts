@@ -98,6 +98,44 @@ export async function PATCH(
     }
 
     if (comments !== undefined) {
+      if (!Array.isArray(comments)) {
+        return NextResponse.json(
+          { success: false, error: 'Lista de comentários inválida.' },
+          { status: 400 }
+        );
+      }
+
+      const admin = createAdminClient();
+      const { data: existingIdea } = await admin
+        .from('ideas')
+        .select('author_email, comments')
+        .eq('id', id)
+        .maybeSingle();
+
+      if (existingIdea?.author_email) {
+        const authorEmailLower = existingIdea.author_email.trim().toLowerCase();
+        const existingComments = Array.isArray(existingIdea.comments) ? existingIdea.comments : [];
+        const existingCommentIds = new Set(existingComments.map((c: any) => c.id));
+
+        const newComments = comments.filter((c: any) => !existingCommentIds.has(c.id));
+        for (const newComm of newComments) {
+          const commEmail = (newComm.userEmail || '').trim().toLowerCase();
+          const isRejectionOrSystem =
+            (newComm.text || '').includes('[Motivo da Recusa]') ||
+            (newComm.text || '').includes('[Demanda Agrupada]');
+
+          if (!isRejectionOrSystem && commEmail && commEmail === authorEmailLower) {
+            return NextResponse.json(
+              {
+                success: false,
+                error: 'O usuário que criou a ideia não pode comentar na própria demanda.',
+              },
+              { status: 403 }
+            );
+          }
+        }
+      }
+
       updatePayload.comments = comments;
     }
 
