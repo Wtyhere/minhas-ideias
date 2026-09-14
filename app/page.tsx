@@ -265,6 +265,25 @@ export default function HomePage() {
     return Object.values(votes).reduce((acc, val) => acc + val, 0);
   };
 
+  const getVoteCounts = (votes: Record<string, number> = {}) => {
+    let positive = 0;
+    let negative = 0;
+    for (const val of Object.values(votes)) {
+      if (val === 1) positive++;
+      else if (val === -1) negative++;
+    }
+    return {
+      positive,
+      negative,
+      score: positive - negative,
+    };
+  };
+
+  const getUserVote = (votes: Record<string, number> = {}, userEmail?: string): number => {
+    if (!userEmail) return 0;
+    return votes[userEmail] || 0;
+  };
+
   const getStatusLabel = (status: IdeaStatus | string) => {
     const map: Record<string, string> = {
       pending_review: 'Em Análise CM',
@@ -317,8 +336,11 @@ export default function HomePage() {
     return false;
   };
 
-  const handleVote = (ideaId: string, value: number) => {
-    if (!user) return;
+  const handleVote = (ideaId: string, value: 1 | -1) => {
+    if (!user) {
+      showToast('Você precisa estar autenticado para votar ou reagir a uma ideia.');
+      return;
+    }
     if (user.role === 'admin') {
       showToast('Administradores possuem permissão apenas de visualização dos votos.');
       return;
@@ -330,42 +352,66 @@ export default function HomePage() {
       return;
     }
 
-    let updatedVotes: Record<string, number> | null = null;
+    const userEmail = user.email;
+    const currentVotes = targetIdea?.votes || {};
+    const currentVote = currentVotes[userEmail] || 0;
+    const newVotes = { ...currentVotes };
 
+    if (currentVote === value) {
+      // Clicou no mesmo: remove a reação
+      delete newVotes[userEmail];
+      showToast(value === 1 ? 'Joinha positivo removido.' : 'Joinha negativo removido.');
+    } else {
+      // Atribui nova reação (+1 positivo ou -1 negativo)
+      newVotes[userEmail] = value;
+      showToast(value === 1 ? 'Você deu um joinha positivo! 👍' : 'Você deu um joinha negativo! 👎');
+    }
+
+    // Atualização otimista
     setIdeas((prev) =>
       prev.map((idea) => {
         if (idea.id !== ideaId) return idea;
-        const currentVote = idea.votes[user.email];
-        const newVotes = { ...idea.votes };
-        if (currentVote === value) {
-          delete newVotes[user.email];
-        } else {
-          newVotes[user.email] = value;
-        }
-        updatedVotes = newVotes;
         return { ...idea, votes: newVotes };
       })
     );
 
     // Se a ideia foi cadastrada no Supabase, sincroniza os votos no banco
-    if (targetIdea?.fromSupabase && updatedVotes) {
+    if (targetIdea?.fromSupabase) {
       fetch(`/api/ideas/${ideaId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ votes: updatedVotes }),
+        body: JSON.stringify({ votes: newVotes }),
       }).catch((err) => {
         console.error('Erro ao sincronizar voto no Supabase:', err);
       });
     }
   };
 
-  const handleAddComment = (ideaId: string, text: string, attachmentName?: string | null) => {
-    if (!user) return;
+  const handleToggleLike = (ideaId: string) => {
+    handleVote(ideaId, 1);
+  };
+
+  const handleAddComment = async (ideaId: string, text: string, attachmentName?: string | null) => {
+    if (!user) {
+      showToast('Você precisa estar autenticado para comentar.');
+      return;
+    }
     if (user.role === 'admin') {
       showToast('Administradores estão em modo de somente leitura para comentários.');
       return;
     }
-    if (!text.trim()) return;
+    if (!text.trim()) {
+      showToast('Por favor, escreva um comentário antes de enviar.');
+      return;
+    }
+
+    const targetIdea = ideas.find((i) => i.id === ideaId);
+    if (!targetIdea) return;
+
+    if (isIdeaAuthor(targetIdea)) {
+      showToast('O usuário que criou a ideia não pode comentar na própria demanda.');
+      return;
+    }
 
     const newComment: Comment = {
       id: `comm-${Date.now()}`,
@@ -376,14 +422,34 @@ export default function HomePage() {
       attachmentName: attachmentName || null,
     };
 
+    const updatedComments = [...targetIdea.comments, newComment];
+
     setIdeas((prev) =>
       prev.map((idea) => {
         if (idea.id !== ideaId) return idea;
-        return { ...idea, comments: [...idea.comments, newComment] };
+        return { ...idea, comments: updatedComments };
       })
     );
 
     showToast('Comentário registrado com sucesso!');
+
+    // Se a ideia foi cadastrada no Supabase, sincroniza os comentários no banco
+    if (targetIdea.fromSupabase) {
+      try {
+        const res = await fetch(`/api/ideas/${ideaId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ comments: updatedComments }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || 'Erro ao sincronizar comentário no banco.');
+        }
+      } catch (err: any) {
+        console.error('Erro ao sincronizar comentário no Supabase:', err);
+        showToast(err.message || 'Erro ao salvar comentário.');
+      }
+    }
   };
 
   const movePipeline = (ideaId: string, nextStatus: IdeaStatus) => {
@@ -1479,8 +1545,8 @@ export default function HomePage() {
             {/* Lista Horizontal de Cards */}
             <div className="flex flex-col gap-4">
               {filteredIdeas.map((idea) => {
-                const score = calculateScore(idea.votes);
-                const userVote = user ? idea.votes[user.email] || 0 : 0;
+                const { positive: posCount, negative: negCount, score } = getVoteCounts(idea.votes);
+                const userVote = getUserVote(idea.votes, user?.email);
                 const isSysPDV = idea.product === 'SysPDV';
                 const isAuthor = isIdeaAuthor(idea);
 
@@ -1604,84 +1670,109 @@ export default function HomePage() {
                           <span className="px-1.5 py-0.2 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-extrabold">
                             {idea.comments.length}
                           </span>
-                          {user?.role === 'admin' && (
+                          {user?.role === 'admin' ? (
                             <span className="text-[10px] text-slate-400 font-normal hidden sm:inline">
                               (Apenas leitura)
                             </span>
-                          )}
+                          ) : isAuthor ? (
+                            <span className="text-[10px] text-amber-600 font-normal hidden sm:inline">
+                              (Autor: leitura)
+                            </span>
+                          ) : null}
                         </button>
 
-                        {/* Bloco de Votos */}
+                        {/* Bloco de Reações (Joinha Positivo / Negativo) */}
                         {idea.status === 'voting' ? (
                           user?.role === 'admin' ? (
                             <div
-                              className="flex items-center bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 shadow-2xs text-xs text-slate-600 gap-2 select-none"
+                              className="flex items-center bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 shadow-2xs text-xs text-slate-600 gap-2.5 select-none"
                               title="Modo Administrador: votação disponível apenas para visualização"
                             >
-                              <span className="flex items-center gap-1 text-slate-500">
-                                <ThumbsUp className="w-3.5 h-3.5 text-slate-400" />
-                                <span className="font-bold text-slate-800">
-                                  {score > 0 ? `+${score}` : score}
-                                </span>
-                                <span>votos</span>
+                              <span className="flex items-center gap-1 text-emerald-700 font-bold" title={`${posCount} joinhas positivos`}>
+                                <ThumbsUp className="w-3.5 h-3.5 text-emerald-600" />
+                                <span>+{posCount}</span>
                               </span>
-                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-200/80 text-slate-600 font-medium">
+                              <span className="text-slate-300">|</span>
+                              <span className="flex items-center gap-1 text-rose-700 font-bold" title={`${negCount} joinhas negativos`}>
+                                <ThumbsDown className="w-3.5 h-3.5 text-rose-500" />
+                                <span>-{negCount}</span>
+                              </span>
+                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-200/80 text-slate-600 font-medium ml-1">
                                 Apenas leitura
                               </span>
                             </div>
                           ) : isAuthor ? (
                             <div
-                              className="flex items-center bg-amber-50/70 border border-amber-200/80 rounded-xl px-3 py-1.5 shadow-2xs text-xs text-amber-900 gap-2 select-none"
+                              className="flex items-center bg-amber-50/70 border border-amber-200/80 rounded-xl px-3 py-1.5 shadow-2xs text-xs text-amber-900 gap-2.5 select-none"
                               title="Você cadastrou esta ideia e não pode votar na sua própria demanda"
                             >
-                              <span className="flex items-center gap-1 text-amber-700">
-                                <ThumbsUp className="w-3.5 h-3.5 text-amber-500" />
-                                <span className="font-bold text-slate-800">
-                                  {score > 0 ? `+${score}` : score}
-                                </span>
-                                <span>{Math.abs(score) === 1 ? 'voto' : 'votos'}</span>
+                              <span className="flex items-center gap-1 text-emerald-700 font-bold" title={`${posCount} joinhas positivos`}>
+                                <ThumbsUp className="w-3.5 h-3.5 text-emerald-600" />
+                                <span>+{posCount}</span>
                               </span>
-                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-semibold border border-amber-200">
+                              <span className="text-amber-200">|</span>
+                              <span className="flex items-center gap-1 text-rose-700 font-bold" title={`${negCount} joinhas negativos`}>
+                                <ThumbsDown className="w-3.5 h-3.5 text-rose-500" />
+                                <span>-{negCount}</span>
+                              </span>
+                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-semibold border border-amber-200 ml-1">
                                 Sua ideia (Autor)
                               </span>
                             </div>
                           ) : (
-                            <div className="flex items-center bg-slate-50 border border-slate-200 rounded-xl p-1 shadow-2xs">
+                            <div className="flex items-center bg-slate-50 border border-slate-200 rounded-xl p-1 shadow-2xs gap-0.5">
+                              {/* Botão Joinha Positivo */}
                               <button
                                 onClick={() => handleVote(idea.id, 1)}
-                                className={`p-1.5 rounded-lg transition-all flex items-center gap-1 text-xs font-bold cursor-pointer ${
+                                className={`px-2.5 py-1.5 rounded-lg transition-all flex items-center gap-1 text-xs font-bold cursor-pointer group active:scale-95 ${
                                   userVote === 1
                                     ? 'bg-emerald-600 text-white shadow-xs'
                                     : 'text-slate-600 hover:text-emerald-700 hover:bg-emerald-50'
                                 }`}
-                                title="Apoiar ideia (+1)"
+                                title={userVote === 1 ? 'Clique para remover seu joinha positivo' : 'Dar joinha positivo (+1)'}
                               >
-                                <ThumbsUp className="w-3.5 h-3.5" />
-                                <span className="hidden sm:inline">Apoiar</span>
+                                <ThumbsUp
+                                  className={`w-3.5 h-3.5 transition-transform ${
+                                    userVote === 1
+                                      ? 'fill-white text-white scale-110'
+                                      : 'text-slate-500 group-hover:text-emerald-600 group-hover:scale-110'
+                                  }`}
+                                />
+                                <span>{posCount}</span>
                               </button>
 
+                              {/* Saldo líquido central */}
                               <span
-                                className={`px-2.5 text-xs font-extrabold ${
+                                className={`px-1.5 text-xs font-extrabold select-none ${
                                   score > 0
                                     ? 'text-emerald-700'
                                     : score < 0
                                     ? 'text-rose-600'
-                                    : 'text-slate-500'
+                                    : 'text-slate-400'
                                 }`}
+                                title={`Saldo líquido: ${score > 0 ? `+${score}` : score}`}
                               >
                                 {score > 0 ? `+${score}` : score}
                               </span>
 
+                              {/* Botão Joinha Negativo */}
                               <button
                                 onClick={() => handleVote(idea.id, -1)}
-                                className={`p-1.5 rounded-lg transition-all flex items-center gap-1 text-xs font-bold cursor-pointer ${
+                                className={`px-2.5 py-1.5 rounded-lg transition-all flex items-center gap-1 text-xs font-bold cursor-pointer group active:scale-95 ${
                                   userVote === -1
                                     ? 'bg-rose-600 text-white shadow-xs'
                                     : 'text-slate-600 hover:text-rose-600 hover:bg-rose-50'
                                 }`}
-                                title="Discordar (-1)"
+                                title={userVote === -1 ? 'Clique para remover seu joinha negativo' : 'Dar joinha negativo (-1)'}
                               >
-                                <ThumbsDown className="w-3.5 h-3.5" />
+                                <ThumbsDown
+                                  className={`w-3.5 h-3.5 transition-transform ${
+                                    userVote === -1
+                                      ? 'fill-white text-white scale-110'
+                                      : 'text-slate-500 group-hover:text-rose-600 group-hover:scale-110'
+                                  }`}
+                                />
+                                <span>{negCount}</span>
                               </button>
                             </div>
                           )
@@ -1691,8 +1782,19 @@ export default function HomePage() {
                             <span>Recusada</span>
                           </div>
                         ) : (
-                          <div className="text-xs text-slate-500 font-semibold px-3 py-1.5 bg-slate-50 rounded-xl border border-slate-200 flex items-center gap-1">
-                            <span className="text-slate-800 font-bold">{score}</span> votos consolidados
+                          <div
+                            className="text-xs text-slate-600 font-semibold px-3 py-1.5 bg-slate-50 rounded-xl border border-slate-200 flex items-center gap-2 select-none"
+                            title={`Positivos: +${posCount} | Negativos: -${negCount}`}
+                          >
+                            <span className="flex items-center gap-1 text-emerald-700 font-bold">
+                              <ThumbsUp className="w-3.5 h-3.5 text-emerald-600" />
+                              <span>+{posCount}</span>
+                            </span>
+                            <span className="text-slate-300">|</span>
+                            <span className="flex items-center gap-1 text-rose-700 font-bold">
+                              <ThumbsDown className="w-3.5 h-3.5 text-rose-500" />
+                              <span>-{negCount}</span>
+                            </span>
                           </div>
                         )}
                       </div>
@@ -2131,7 +2233,7 @@ export default function HomePage() {
             {/* Tabela de Ranking */}
             <div className="bg-white border border-slate-200/80 rounded-3xl p-6 shadow-xs">
               <h3 className="text-sm font-bold text-slate-800 mb-4 flex items-center justify-between">
-                <span>Ranking de Votação Popular (Em Votação)</span>
+                <span>Ranking de Votação da Comunidade (Em Votação)</span>
                 <span className="text-xs text-slate-500 font-normal">
                   Total de {ideas.filter((i) => i.status === 'voting').length} demanda(s) disputando vaga no ciclo
                 </span>
@@ -2144,7 +2246,7 @@ export default function HomePage() {
                       <th className="py-3 px-4">Posição</th>
                       <th className="py-3 px-4">Sistema</th>
                       <th className="py-3 px-4">Título da Demanda</th>
-                      <th className="py-3 px-4 text-center">Score Líquido</th>
+                      <th className="py-3 px-4 text-center">Joinhas & Saldo</th>
                       <th className="py-3 px-4">Evidências / Insumos</th>
                       <th className="py-3 px-4 text-right">Ação de Ciclo</th>
                     </tr>
@@ -2181,15 +2283,34 @@ export default function HomePage() {
                               </div>
                             </td>
                             <td className="py-3.5 px-4 text-center">
-                              <span
-                                className={`font-bold px-3 py-1 rounded-full text-xs ${
-                                  score > 0
-                                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                                    : 'bg-slate-100 text-slate-600'
-                                }`}
-                              >
-                                {score > 0 ? `+${score}` : score}
-                              </span>
+                              {(() => {
+                                const { positive: p, negative: n, score: s } = getVoteCounts(item.votes);
+                                return (
+                                  <div className="flex items-center justify-center gap-2 font-bold text-xs">
+                                    <span className="text-emerald-700 flex items-center gap-0.5" title={`${p} joinhas positivos`}>
+                                      <ThumbsUp className="w-3 h-3 text-emerald-600" />
+                                      <span>+{p}</span>
+                                    </span>
+                                    <span className="text-slate-300">|</span>
+                                    <span className="text-rose-600 flex items-center gap-0.5" title={`${n} joinhas negativos`}>
+                                      <ThumbsDown className="w-3 h-3 text-rose-500" />
+                                      <span>-{n}</span>
+                                    </span>
+                                    <span
+                                      className={`ml-1 px-2 py-0.5 rounded-full text-[11px] font-extrabold ${
+                                        s > 0
+                                          ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                                          : s < 0
+                                          ? 'bg-rose-50 text-rose-800 border border-rose-200'
+                                          : 'bg-slate-100 text-slate-600'
+                                      }`}
+                                      title="Saldo líquido de votos"
+                                    >
+                                      {s > 0 ? `+${s}` : s}
+                                    </span>
+                                  </div>
+                                );
+                              })()}
                             </td>
                             <td className="py-3.5 px-4 text-slate-500">
                               {item.attachments.length > 0 ? (
@@ -2807,74 +2928,128 @@ export default function HomePage() {
                   )}
                 </div>
 
-                {/* Votação */}
-                <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 flex items-center justify-between">
-                  <div>
-                    <div className="font-bold text-slate-800">
-                      {user?.role === 'admin'
-                        ? 'Apoio da Comunidade Varejista:'
-                        : isIdeaAuthor(selectedIdeaDetails)
-                        ? 'Sua ideia:'
-                        : 'Sua opinião como parceiro:'}
-                    </div>
-                    <div className="text-slate-500 text-[11px]">
-                      {user?.role === 'admin'
-                        ? 'Contagem consolidada de votos para priorização'
-                        : isIdeaAuthor(selectedIdeaDetails)
-                        ? 'Você cadastrou esta ideia. Autores não podem votar na própria demanda.'
-                        : 'Essa melhoria também ajudaria a sua loja?'}
-                    </div>
-                  </div>
+                {/* Reações: Joinha Positivo / Negativo */}
+                {(() => {
+                  const drawerVotes = getVoteCounts(selectedIdeaDetails.votes);
+                  const drawerUserVote = getUserVote(selectedIdeaDetails.votes, user?.email);
+                  const isAuthor = isIdeaAuthor(selectedIdeaDetails);
 
-                  {user?.role === 'admin' ? (
-                    <div className="text-xs font-bold px-3 py-1.5 bg-white border border-slate-200 rounded-xl text-slate-700 flex items-center gap-1.5">
-                      <ThumbsUp className="w-3.5 h-3.5 text-slate-500" />
-                      <span>{calculateScore(selectedIdeaDetails.votes)} votos (Modo visualização)</span>
-                    </div>
-                  ) : isIdeaAuthor(selectedIdeaDetails) ? (
-                    <div className="flex items-center gap-2">
-                      <div
-                        className="text-xs font-semibold px-3 py-1.5 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 flex items-center gap-1.5 select-none"
-                        title="Você cadastrou esta ideia e não pode votar na sua própria demanda"
-                      >
-                        <ThumbsUp className="w-3.5 h-3.5 text-amber-600" />
-                        <span className="font-bold text-slate-800">{calculateScore(selectedIdeaDetails.votes)}</span>
-                        <span>{Math.abs(calculateScore(selectedIdeaDetails.votes)) === 1 ? 'voto' : 'votos'}</span>
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-bold border border-amber-200 ml-1">
-                          Autor (Voto não permitido)
-                        </span>
+                  return (
+                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                      <div>
+                        <div className="font-bold text-slate-800 flex items-center gap-1.5">
+                          <ThumbsUp className="w-4 h-4 text-emerald-600" />
+                          <span>
+                            {user?.role === 'admin'
+                              ? 'Votação da Comunidade Varejista:'
+                              : isAuthor
+                              ? 'Sua ideia:'
+                              : 'Essa melhoria ajudaria a sua loja?'}
+                          </span>
+                        </div>
+                        <div className="text-slate-500 text-[11px] mt-0.5">
+                          {user?.role === 'admin'
+                            ? 'Contagem consolidada de votos para priorização'
+                            : isAuthor
+                            ? 'Você cadastrou esta ideia. Autores não podem votar na própria demanda.'
+                            : 'Deixe seu joinha positivo ou negativo para priorizarmos a demanda!'}
+                        </div>
                       </div>
-                    </div>
-                  ) : selectedIdeaDetails.status === 'voting' ? (
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => handleVote(selectedIdeaDetails.id, 1)}
-                        className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
-                          user && selectedIdeaDetails.votes[user.email] === 1
-                            ? 'bg-emerald-600 text-white shadow-xs'
-                            : 'bg-white text-slate-700 border border-slate-200 hover:text-emerald-700'
-                        }`}
-                      >
-                        <ThumbsUp className="w-3.5 h-3.5" />
-                        <span>Sim (+1)</span>
-                      </button>
 
-                      <button
-                        onClick={() => handleVote(selectedIdeaDetails.id, -1)}
-                        className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
-                          user && selectedIdeaDetails.votes[user.email] === -1
-                            ? 'bg-rose-600 text-white shadow-xs'
-                            : 'bg-white text-slate-700 border border-slate-200 hover:text-rose-600'
-                        }`}
-                      >
-                        <ThumbsDown className="w-3.5 h-3.5" />
-                        <span>Não (-1)</span>
-                      </button>
+                      {user?.role === 'admin' ? (
+                        <div className="text-xs font-bold px-3.5 py-2 bg-white border border-slate-200 rounded-xl text-slate-700 flex items-center gap-2 select-none">
+                          <span className="flex items-center gap-1 text-emerald-700 font-bold">
+                            <ThumbsUp className="w-3.5 h-3.5 text-emerald-600" />
+                            <span>+{drawerVotes.positive}</span>
+                          </span>
+                          <span className="text-slate-300">|</span>
+                          <span className="flex items-center gap-1 text-rose-700 font-bold">
+                            <ThumbsDown className="w-3.5 h-3.5 text-rose-500" />
+                            <span>-{drawerVotes.negative}</span>
+                          </span>
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-medium ml-1">
+                            Apenas leitura
+                          </span>
+                        </div>
+                      ) : isAuthor ? (
+                        <div className="flex items-center gap-2">
+                          <div
+                            className="text-xs font-semibold px-3.5 py-2 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 flex items-center gap-2 select-none"
+                            title="Você cadastrou esta ideia e não pode votar na sua própria demanda"
+                          >
+                            <span className="flex items-center gap-1 text-emerald-700 font-bold">
+                              <ThumbsUp className="w-3.5 h-3.5 text-emerald-600" />
+                              <span>+{drawerVotes.positive}</span>
+                            </span>
+                            <span className="text-amber-200">|</span>
+                            <span className="flex items-center gap-1 text-rose-700 font-bold">
+                              <ThumbsDown className="w-3.5 h-3.5 text-rose-500" />
+                              <span>-{drawerVotes.negative}</span>
+                            </span>
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-bold border border-amber-200 ml-1">
+                              Autor (Voto não permitido)
+                            </span>
+                          </div>
+                        </div>
+                      ) : selectedIdeaDetails.status === 'voting' ? (
+                        <div className="flex items-center bg-white border border-slate-200 rounded-xl p-1 shadow-2xs gap-1">
+                          {/* Joinha Positivo */}
+                          <button
+                            onClick={() => handleVote(selectedIdeaDetails.id, 1)}
+                            className={`px-3 py-1.5 rounded-lg font-bold flex items-center gap-1.5 text-xs transition-all cursor-pointer active:scale-95 ${
+                              drawerUserVote === 1
+                                ? 'bg-emerald-600 text-white shadow-xs'
+                                : 'text-slate-700 hover:text-emerald-700 hover:bg-emerald-50'
+                            }`}
+                            title={drawerUserVote === 1 ? 'Clique para remover seu joinha positivo' : 'Dar joinha positivo (+1)'}
+                          >
+                            <ThumbsUp
+                              className={`w-4 h-4 ${
+                                drawerUserVote === 1 ? 'fill-white text-white' : 'text-emerald-600'
+                              }`}
+                            />
+                            <span>Positivo (+{drawerVotes.positive})</span>
+                          </button>
+
+                          <div className="h-4 w-px bg-slate-200" />
+
+                          {/* Joinha Negativo */}
+                          <button
+                            onClick={() => handleVote(selectedIdeaDetails.id, -1)}
+                            className={`px-3 py-1.5 rounded-lg font-bold flex items-center gap-1.5 text-xs transition-all cursor-pointer active:scale-95 ${
+                              drawerUserVote === -1
+                                ? 'bg-rose-600 text-white shadow-xs'
+                                : 'text-slate-700 hover:text-rose-600 hover:bg-rose-50'
+                            }`}
+                            title={drawerUserVote === -1 ? 'Clique para remover seu joinha negativo' : 'Dar joinha negativo (-1)'}
+                          >
+                            <ThumbsDown
+                              className={`w-4 h-4 ${
+                                drawerUserVote === -1 ? 'fill-white text-white' : 'text-rose-600'
+                              }`}
+                            />
+                            <span>Negativo (-{drawerVotes.negative})</span>
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="text-xs text-slate-600 font-semibold px-3 py-1.5 bg-white rounded-xl border border-slate-200 flex items-center gap-2 select-none">
+                          <span className="flex items-center gap-1 text-emerald-700 font-bold">
+                            <ThumbsUp className="w-3.5 h-3.5 text-emerald-600" />
+                            <span>+{drawerVotes.positive}</span>
+                          </span>
+                          <span className="text-slate-300">|</span>
+                          <span className="flex items-center gap-1 text-rose-700 font-bold">
+                            <ThumbsDown className="w-3.5 h-3.5 text-rose-500" />
+                            <span>-{drawerVotes.negative}</span>
+                          </span>
+                          <span className="text-[10px] text-slate-400 font-normal ml-1">
+                            (Votação encerrada)
+                          </span>
+                        </div>
+                      )}
                     </div>
-                  ) : (
-                    <span className="text-xs text-slate-500 font-semibold">Votação encerrada para este item</span>
-                  )}
-                </div>
+                  );
+                })()}
 
                 {/* Comentários */}
                 <div className="border-t border-slate-100 pt-4 space-y-3">
@@ -2905,7 +3080,25 @@ export default function HomePage() {
                     )}
                   </div>
 
-                  {user?.role !== 'admin' && (
+                  {user?.role === 'admin' ? (
+                    <div className="p-3 bg-amber-50/80 border border-amber-200 rounded-xl text-center">
+                      <p className="text-xs font-semibold text-amber-900">
+                        Modo Administrador: Apenas visualização de comentários
+                      </p>
+                    </div>
+                  ) : isIdeaAuthor(selectedIdeaDetails) ? (
+                    <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-2xl flex items-center gap-2.5">
+                      <AlertCircle className="w-5 h-5 text-amber-600 shrink-0" />
+                      <div>
+                        <p className="text-xs font-bold text-amber-900">
+                          Comentários desabilitados para o autor
+                        </p>
+                        <p className="text-[11px] text-amber-700 mt-0.5">
+                          Você cadastrou esta demanda. O espaço de comentários é destinado à colaboração dos outros parceiros.
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
                     <div className="pt-2 space-y-2">
                       <textarea
                         id="details-comment-text"
@@ -3052,6 +3245,18 @@ export default function HomePage() {
                     <p className="text-[11px] text-amber-700 mt-0.5">
                       A publicação de comentários é restrita à comunidade de supermercadistas.
                     </p>
+                  </div>
+                ) : isIdeaAuthor(commentsDrawerIdea) ? (
+                  <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-2xl flex items-center gap-2.5">
+                    <AlertCircle className="w-5 h-5 text-amber-600 shrink-0" />
+                    <div>
+                      <p className="text-xs font-bold text-amber-900">
+                        Comentários desabilitados para o autor
+                      </p>
+                      <p className="text-[11px] text-amber-700 mt-0.5">
+                        Você cadastrou esta demanda. O espaço de comentários é destinado à colaboração dos outros parceiros.
+                      </p>
+                    </div>
                   </div>
                 ) : (
                   <>
