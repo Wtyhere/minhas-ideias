@@ -114,7 +114,7 @@ export async function GET(request: Request) {
     const mappedIdeas: Idea[] = (dbIdeas || []).map((row) => ({
       id: row.id,
       title: row.title,
-      product: row.product as 'Varejofacil' | 'SysPDV',
+      product: 'Varejofacil',
       category: row.category,
       company: row.company,
       authorName: row.author_name,
@@ -156,8 +156,8 @@ export async function POST(request: Request) {
     const contentType = request.headers.get('content-type') || '';
 
     let title = '';
-    let product: 'Varejofacil' | 'SysPDV' = 'Varejofacil';
-    let category = 'Frente de Loja';
+    let product: 'Varejofacil' = 'Varejofacil';
+    let category = 'Estoque';
     let painDescription = '';
     let currentWorkaround = '';
     let cycle = 'Ciclo 2027';
@@ -172,8 +172,8 @@ export async function POST(request: Request) {
     if (contentType.includes('multipart/form-data')) {
       const formData = await request.formData();
       title = (formData.get('title') as string) || '';
-      product = ((formData.get('product') as string) || 'Varejofacil') as 'Varejofacil' | 'SysPDV';
-      category = (formData.get('category') as string) || 'Frente de Loja';
+      product = 'Varejofacil';
+      category = (formData.get('category') as string) || 'Estoque';
       painDescription = (formData.get('painDescription') as string) || '';
       currentWorkaround = (formData.get('currentWorkaround') as string) || '';
       cycle = (formData.get('cycle') as string) || 'Ciclo 2027';
@@ -251,7 +251,7 @@ export async function POST(request: Request) {
       const body = await request.json();
       title = body.title || '';
       product = body.product || 'Varejofacil';
-      category = body.category || 'Frente de Loja';
+      category = body.category || 'Estoque';
       painDescription = body.painDescription || '';
       currentWorkaround = body.currentWorkaround || '';
       cycle = body.cycle || 'Ciclo 2026.2';

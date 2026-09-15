@@ -3,9 +3,9 @@ import { Idea } from '@/types/idea';
 export const INITIAL_IDEAS: Idea[] = [
   {
     id: 'ideia-101',
-    title: 'Controle de Ruptura de Gôndola em Tempo Real via SysPDV',
-    product: 'SysPDV',
-    category: 'Frente de Loja',
+    title: 'Controle de Ruptura de Gôndola em Tempo Real no PDV',
+    product: 'Varejofacil',
+    category: 'Estoque',
     company: 'Supermercado Central de Fortaleza',
     authorName: 'Carlos Silveira',
     authorEmail: 'usuario@cm.com.br',
@@ -62,8 +62,8 @@ export const INITIAL_IDEAS: Idea[] = [
   },
   {
     id: 'ideia-103',
-    title: 'Sangria Cega com Fechamento Dinâmico de Lote PIX no SysPDV PDV',
-    product: 'SysPDV',
+    title: 'Sangria Cega com Fechamento Dinâmico de Lote PIX no PDV',
+    product: 'Varejofacil',
     category: 'Financeiro',
     company: 'Supermercado Bom Demais',
     authorName: 'Roberto Alves',
@@ -115,7 +115,7 @@ export const INITIAL_IDEAS: Idea[] = [
     authorEmail: 'lucas@modelo.com.br',
     createdAt: '2026-06-10',
     cycle: 'Ciclo 2026.1',
-    painDescription: 'Itens perto do vencimento precisam de desconto automático no leitor do SysPDV sem necessitar que o caixa chame o fiscal.',
+    painDescription: 'Itens perto do vencimento precisam de desconto automático no leitor do caixa sem necessitar que o operador chame o fiscal.',
     currentWorkaround: 'Colamos etiquetas adesivas amarelas manuais e o operador digita código de desconto especial 9999.',
     attachments: [],
     status: 'delivered',
