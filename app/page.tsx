@@ -76,7 +76,7 @@ export default function HomePage() {
   const [usersFetched, setUsersFetched] = useState(false);
   const [activeTab, setActiveTab] = useState<'board' | 'new-idea' | 'admin-review' | 'prioritization' | 'users'>('board');
   const [statusTab, setStatusTab] = useState<'disponiveis' | 'desenvolvimento' | 'entregues' | 'minhas'>('disponiveis');
-  const [selectedProduct, setSelectedProduct] = useState<'TODOS' | 'Varejofacil' | 'SysPDV'>('TODOS');
+  const [selectedProduct, setSelectedProduct] = useState<'TODOS' | 'Varejofacil'>('TODOS');
   const [selectedCategory, setSelectedCategory] = useState<string>('TODOS');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const activeCycle = 'Ciclo 2027';
@@ -116,8 +116,8 @@ export default function HomePage() {
 
   // New Idea Form fields
   const [newTitle, setNewTitle] = useState<string>('');
-  const [newProduct, setNewProduct] = useState<'Varejofacil' | 'SysPDV'>('Varejofacil');
-  const [newCategory, setNewCategory] = useState<string>('Frente de Loja');
+  const [newProduct, setNewProduct] = useState<'Varejofacil'>('Varejofacil');
+  const [newCategory, setNewCategory] = useState<string>('Estoque');
   const [newPain, setNewPain] = useState<string>('');
   const [newWorkaround, setNewWorkaround] = useState<string>('');
   const [newFiles, setNewFiles] = useState<File[]>([]);
@@ -1178,7 +1178,7 @@ export default function HomePage() {
               </div>
               <h1 className="text-2xl font-bold tracking-tight text-slate-900">Minhas Ideias na CM</h1>
               <p className="text-xs sm:text-sm text-slate-500 mt-1.5 leading-relaxed max-w-xs mx-auto">
-                Sua voz constrói o futuro do <span className="text-emerald-700 font-semibold">Varejofacil</span> e <span className="text-teal-700 font-semibold">SysPDV</span>
+                Sua voz constrói o futuro do <span className="text-emerald-700 font-semibold">Varejofacil</span>
               </p>
             </div>
             {loginStep === 'email' && (
@@ -1680,7 +1680,7 @@ export default function HomePage() {
                   Qual dor na sua loja consome tempo precioso da sua equipe?
                 </h2>
                 <p className="text-emerald-100 text-sm mt-2 leading-relaxed">
-                  Não sofra mais com planilhas paralelas e rotinas manuais. Compartilhe como você contorna os problemas no dia a dia. As melhorias mais votadas entram diretamente no planejamento do <strong>Varejofacil</strong> e <strong>SysPDV</strong>.
+                  Não sofra mais com planilhas paralelas e rotinas manuais. Compartilhe como você contorna os problemas no dia a dia. As melhorias mais votadas entram diretamente no planejamento do <strong>Varejofacil</strong>.
                 </p>
 
                 {user?.role !== 'admin' ? (
@@ -1853,7 +1853,7 @@ export default function HomePage() {
                   <span className="text-xs text-slate-500 flex items-center gap-1 font-semibold pl-1">
                     <Filter className="w-3.5 h-3.5 text-emerald-600" /> Sistema:
                   </span>
-                  {(['TODOS', 'Varejofacil', 'SysPDV'] as const).map((prod) => (
+                  {(['TODOS', 'Varejofacil'] as const).map((prod) => (
                     <button
                       key={prod}
                       onClick={() => setSelectedProduct(prod)}
@@ -1861,8 +1861,6 @@ export default function HomePage() {
                         selectedProduct === prod
                           ? prod === 'Varejofacil'
                             ? 'bg-emerald-600 text-white shadow-xs'
-                            : prod === 'SysPDV'
-                            ? 'bg-teal-700 text-white shadow-xs'
                             : 'bg-slate-800 text-white shadow-xs'
                           : 'bg-slate-100 text-slate-600 hover:text-slate-900 border border-slate-200'
                       }`}
@@ -1883,7 +1881,6 @@ export default function HomePage() {
                       className="bg-transparent text-xs font-semibold text-slate-800 focus:outline-none cursor-pointer pr-2"
                     >
                       <option value="TODOS">Todas as Áreas / Setores</option>
-                      <option value="Frente de Loja">Frente de Loja & Caixas</option>
                       <option value="Estoque">Estoque & Recebimento</option>
                       <option value="Fiscal">Fiscal & Contabilidade</option>
                       <option value="Financeiro">Financeiro & Tesouraria</option>
@@ -1900,7 +1897,6 @@ export default function HomePage() {
               {filteredIdeas.map((idea) => {
                 const { positive: posCount, negative: negCount, score } = getVoteCounts(idea.votes);
                 const userVote = getUserVote(idea.votes, user?.email);
-                const isSysPDV = idea.product === 'SysPDV';
                 const isAuthor = isIdeaAuthor(idea);
 
                 return (
@@ -1912,13 +1908,7 @@ export default function HomePage() {
                       {/* Topo do Card */}
                       <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5">
                         <div className="flex flex-wrap items-center gap-2">
-                          <span
-                            className={`text-xs font-bold px-3 py-1 rounded-full border ${
-                              isSysPDV
-                                ? 'bg-teal-50 text-teal-800 border-teal-200'
-                                : 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                            }`}
-                          >
+                          <span className="text-xs font-bold px-3 py-1 rounded-full border bg-emerald-50 text-emerald-800 border-emerald-200">
                             {idea.product}
                           </span>
 
@@ -2218,7 +2208,7 @@ export default function HomePage() {
                   required
                   value={newTitle}
                   onChange={(e) => setNewTitle(e.target.value)}
-                  placeholder="Ex: Conciliação Automática de Vendas com Carteiras Digitais no SysPDV"
+                  placeholder="Ex: Conciliação Automática de Vendas com Carteiras Digitais no Varejofacil"
                   className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-900 text-sm focus:ring-2 focus:ring-emerald-500 focus:bg-white focus:outline-none placeholder-slate-400 transition-all"
                 />
               </div>
@@ -2251,7 +2241,6 @@ export default function HomePage() {
                     onChange={(e) => setNewCategory(e.target.value)}
                     className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-900 text-sm focus:ring-2 focus:ring-emerald-500 focus:bg-white focus:outline-none"
                   >
-                    <option value="Frente de Loja">Frente de Loja & Caixas</option>
                     <option value="Estoque">Estoque & Recebimento</option>
                     <option value="Fiscal">Fiscal & Contabilidade</option>
                     <option value="Financeiro">Financeiro & Tesouraria</option>
@@ -2579,7 +2568,7 @@ export default function HomePage() {
                 Priorização das Ideias Mais Votadas ({activeCycle})
               </h2>
               <p className="text-xs sm:text-sm text-slate-500 mt-1">
-                Ao final da votação, a equipe de produto Casa Magalhães seleciona as demandas campeãs para entrar na esteira de desenvolvimento do <strong>Varejofacil</strong> e <strong>SysPDV</strong>.
+                Ao final da votação, a equipe de produto Casa Magalhães seleciona as demandas campeãs para entrar na esteira de desenvolvimento do <strong>Varejofacil</strong>.
               </p>
             </div>
 
@@ -2619,13 +2608,7 @@ export default function HomePage() {
                               )}
                             </td>
                             <td className="py-3.5 px-4">
-                              <span
-                                className={`px-2.5 py-0.5 rounded-full font-bold ${
-                                  item.product === 'SysPDV'
-                                    ? 'bg-teal-50 text-teal-800 border border-teal-200'
-                                    : 'bg-emerald-50 text-emerald-800 border border-emerald-200'
-                                }`}
-                              >
+                              <span className="px-2.5 py-0.5 rounded-full font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
                                 {item.product}
                               </span>
                             </td>
@@ -3146,7 +3129,7 @@ export default function HomePage() {
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
           <div>Casa Magalhães S/A • Minhas Ideias na CM</div>
           <div className="text-[11px] text-slate-400">
-            Conectando a operação de supermercados ao P&D de Varejofacil e SysPDV
+            Conectando a operação de supermercados ao P&D de Varejofacil
           </div>
         </div>
       </footer>
@@ -3164,13 +3147,7 @@ export default function HomePage() {
               <div className="p-5 sm:p-6 border-b border-slate-100 flex items-start justify-between gap-4 bg-white sticky top-0 z-10">
                 <div className="space-y-1">
                   <div className="flex flex-wrap items-center gap-2 mb-1">
-                    <span
-                      className={`text-xs font-bold px-2.5 py-0.5 rounded-full ${
-                        selectedIdeaDetails.product === 'SysPDV'
-                          ? 'bg-teal-50 text-teal-800 border border-teal-200'
-                          : 'bg-emerald-50 text-emerald-800 border border-emerald-200'
-                      }`}
-                    >
+                    <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200">
                       {selectedIdeaDetails.product}
                     </span>
                     <span className="text-xs text-slate-500 font-medium">Ciclo: {selectedIdeaDetails.cycle}</span>
@@ -3523,13 +3500,7 @@ export default function HomePage() {
               <div className="p-5 border-b border-slate-100 flex items-start justify-between gap-3 bg-white sticky top-0 z-10">
                 <div className="space-y-1">
                   <div className="flex items-center gap-2">
-                    <span
-                      className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-                        commentsDrawerIdea.product === 'SysPDV'
-                          ? 'bg-teal-50 text-teal-800 border-teal-200'
-                          : 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                      }`}
-                    >
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border bg-emerald-50 text-emerald-800 border-emerald-200">
                       {commentsDrawerIdea.product}
                     </span>
                     <span className="text-[11px] text-slate-500 font-medium">{commentsDrawerIdea.category}</span>

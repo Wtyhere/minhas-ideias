@@ -27,7 +27,7 @@ export type IdeaStatus =
 export interface Idea {
   id: string;
   title: string;
-  product: 'Varejofacil' | 'SysPDV';
+  product: 'Varejofacil';
   category: string;
   company: string;
   authorName: string;

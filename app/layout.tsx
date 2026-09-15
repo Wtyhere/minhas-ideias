@@ -11,7 +11,7 @@ const inter = Inter({
 
 export const metadata: Metadata = {
   title: "VF - Minhas Ideias na CM | Casa Magalhães",
-  description: "Portal colaborativo de demandas e inovação para SysPDV e Varejofacil",
+  description: "Portal colaborativo de demandas e inovação para o Varejofacil",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
