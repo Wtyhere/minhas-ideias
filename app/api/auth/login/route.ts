@@ -24,7 +24,7 @@ export async function POST(request: Request) {
 
     if (!cleanEmail) {
       return NextResponse.json(
-        { success: false, error: 'Por favor, insira o seu e-mail corporativo.' },
+        { success: false, error: 'Por favor, insira o seu e-mail.' },
         { status: 400 }
       );
     }

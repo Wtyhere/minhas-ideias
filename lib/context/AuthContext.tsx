@@ -7,7 +7,8 @@ interface AuthContextType {
   user: User | null;
   loading: boolean;
   login: (credentials: LoginCredentials) => Promise<{ success: boolean; error?: string }>;
-  logout: () => Promise<void>;
+  logout: () => Promise<boolean>;
+  setUser: React.Dispatch<React.SetStateAction<User | null>>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -66,16 +67,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const logout = async () => {
+  const logout = async (): Promise<boolean> => {
     try {
-      await fetch('/api/auth/logout', { method: 'POST' });
-    } finally {
-      setUser(null);
+      const res = await fetch('/api/auth/logout', { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        if (data.success !== false) {
+          setUser(null);
+          return true;
+        }
+      }
+      return false;
+    } catch (err) {
+      console.error('Erro ao encerrar sessão no servidor:', err);
+      return false;
     }
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout }}>
+    <AuthContext.Provider value={{ user, loading, login, logout, setUser }}>
       {children}
     </AuthContext.Provider>
   );

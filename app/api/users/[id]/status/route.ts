@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { isSupabaseConfigured, requireAdmin } from '@/lib/api-helpers';
+import { normalizeCnpj } from '@/lib/validation';
 
 // ─── PATCH /api/users/[id]/status ────────────────────────────────────────────
 // Alterna o status do usuário entre 'active' e 'inactive'
@@ -55,7 +56,7 @@ export async function PATCH(
         .maybeSingle();
 
       if (currentProfile?.cnpj) {
-        const cleanCnpjDigits = currentProfile.cnpj.replace(/\D/g, '');
+        const cleanCnpjDigits = normalizeCnpj(currentProfile.cnpj);
         const ALLOWED_DUPLICATE_CNPJ = '07128945000132';
 
         if (cleanCnpjDigits !== ALLOWED_DUPLICATE_CNPJ) {
@@ -64,7 +65,7 @@ export async function PATCH(
             .select('id, cnpj, status');
 
           const activeCnpjExists = allProfiles?.some(
-            (p) => p.id !== id && p.cnpj && p.cnpj.replace(/\D/g, '') === cleanCnpjDigits && p.status === 'active'
+            (p) => p.id !== id && p.cnpj && normalizeCnpj(p.cnpj) === cleanCnpjDigits && p.status === 'active'
           );
 
           if (activeCnpjExists) {

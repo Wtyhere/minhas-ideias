@@ -3,6 +3,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { INITIAL_USERS } from '@/lib/auth';
 import { User } from '@/types/auth';
 import { isSupabaseConfigured, requireAdmin } from '@/lib/api-helpers';
+import { isValidCnpj, normalizeCnpj } from '@/lib/validation';
 
 // ─── GET /api/users ──────────────────────────────────────────────────────────
 // Lista todos os usuários da tabela profiles (apenas admins)
@@ -84,6 +85,13 @@ export async function POST(request: Request) {
       );
     }
 
+    if (!isValidCnpj(cnpj)) {
+      return NextResponse.json(
+        { success: false, error: 'CNPJ inválido. Por favor, forneça um CNPJ válido.' },
+        { status: 400 }
+      );
+    }
+
     const admin = createAdminClient();
 
     // Verifica duplicidade de e-mail antes de tentar criar
@@ -102,7 +110,7 @@ export async function POST(request: Request) {
 
     // Verifica duplicidade de CNPJ (se existir pelo menos um usuário ativo com este CNPJ, barra o cadastro)
     // O único CNPJ que pode possuir múltiplos cadastros é 07128945000132
-    const cleanCnpjDigits = cnpj.replace(/\D/g, '');
+    const cleanCnpjDigits = normalizeCnpj(cnpj);
     const ALLOWED_DUPLICATE_CNPJ = '07128945000132';
 
     if (cleanCnpjDigits !== ALLOWED_DUPLICATE_CNPJ) {
@@ -111,7 +119,7 @@ export async function POST(request: Request) {
         .select('id, cnpj, status');
 
       const activeCnpjExists = allProfiles?.some(
-        (p) => p.cnpj && p.cnpj.replace(/\D/g, '') === cleanCnpjDigits && p.status === 'active'
+        (p) => p.cnpj && normalizeCnpj(p.cnpj) === cleanCnpjDigits && p.status === 'active'
       );
 
       if (activeCnpjExists) {

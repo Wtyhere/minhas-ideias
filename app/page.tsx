@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Lightbulb,
@@ -46,6 +46,7 @@ import { Idea, Comment, IdeaStatus } from '@/types/idea';
 import { User } from '@/types/auth';
 import { INITIAL_IDEAS } from '@/lib/data';
 import ChangePasswordModal from '../app/components/ChangePassWordModal';
+import { isValidCnpj, formatCnpj, normalizeCnpj, formatDateBR, formatDateTimeBR } from '@/lib/validation';
 
 const ALLOWED_FILE_EXTENSIONS = ['.xlsx', '.csv', '.pdf', '.png', '.jpg', '.jpeg'];
 const isAllowedFileExtension = (fileName: string): boolean => {
@@ -63,7 +64,7 @@ interface ToastItem {
 
 export default function HomePage() {
   const router = useRouter();
-  const { user, loading, login, logout } = useAuth();
+  const { user, loading, login, logout, setUser } = useAuth();
 
   // State matching index.html
   const [ideas, setIdeas] = useState<Idea[]>([]);
@@ -78,7 +79,7 @@ export default function HomePage() {
   const [selectedProduct, setSelectedProduct] = useState<'TODOS' | 'Varejofacil' | 'SysPDV'>('TODOS');
   const [selectedCategory, setSelectedCategory] = useState<string>('TODOS');
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const activeCycle = 'Ciclo 2026.2';
+  const activeCycle = 'Ciclo 2027';
 
   // Drawers & Modals
   const [selectedIdeaDetailsId, setSelectedIdeaDetailsId] = useState<string | null>(null);
@@ -127,12 +128,46 @@ export default function HomePage() {
   const [detailsCommentText, setDetailsCommentText] = useState<string>('');
   const [detailsCommentFile, setDetailsCommentFile] = useState<string | null>(null);
 
-  // Login form fields (when not logged in)
+  // Login form step & fields (when not logged in)
+  const [loginStep, setLoginStep] = useState<'email' | 'password' | 'set_password'>('email');
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [targetUserName, setTargetUserName] = useState('');
 
-  // Show password button
+  // Show password buttons
   const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+
+  // Limpa os campos de login e reseta a aba ativa sempre que o usuário deslogar
+  const prevUserRef = useRef(user);
+  useEffect(() => {
+    if (prevUserRef.current && !user) {
+      setLoginEmail('');
+      setLoginPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setTargetUserName('');
+      setShowPassword(false);
+      setShowConfirmPassword(false);
+      setLoginStep('email');
+      setActiveTab('board');
+      setStatusTab('disponiveis');
+      setSelectedProduct('TODOS');
+      setSelectedCategory('TODOS');
+      setSearchQuery('');
+    }
+    prevUserRef.current = user;
+  }, [user]);
+
+  // Sempre que um usuário fizer login, garante que a aba inicial seja o Mural de Ideias ('board')
+  useEffect(() => {
+    if (user) {
+      setActiveTab('board');
+      setStatusTab('disponiveis');
+    }
+  }, [user?.id]);
 
   const [isLoading, setIsLoading] = useState(false);
 
@@ -287,7 +322,7 @@ export default function HomePage() {
   const getStatusLabel = (status: IdeaStatus | string) => {
     const map: Record<string, string> = {
       pending_review: 'Em Análise CM',
-      voting: 'Em Votação Aberta',
+      voting: 'Votação Aberta',
       in_immersion: 'Em Imersão',
       in_development: 'Em Desenvolvimento',
       in_validation: 'Em Validação',
@@ -418,7 +453,7 @@ export default function HomePage() {
       userName: user.name,
       userEmail: user.email,
       text: text.trim(),
-      date: new Date().toISOString().split('T')[0],
+      date: formatDateBR(new Date()),
       attachmentName: attachmentName || null,
     };
 
@@ -524,7 +559,7 @@ export default function HomePage() {
       userName: user?.name || 'Curadoria Casa Magalhães',
       userEmail: user?.email || 'admin@cm.com.br',
       text: `[Motivo da Recusa]: ${reason}`,
-      date: new Date().toISOString().split('T')[0],
+      date: formatDateBR(new Date()),
       attachmentName: null,
     };
 
@@ -592,7 +627,7 @@ export default function HomePage() {
             userName: 'Sistema (Agrupamento)',
             userEmail: 'sistema@cm.com.br',
             text: `A ideia "${sourceIdea.title}" foi agrupada a esta demanda por ter o mesmo escopo operacional.`,
-            date: new Date().toISOString().split('T')[0],
+            date: formatDateBR(new Date()),
           };
           return { ...idea, comments: [...idea.comments, mergeComment] };
         }
@@ -700,24 +735,169 @@ export default function HomePage() {
     }
   };
 
-  const handleExecuteLogin = async (email: string, pass: string) => {
-    const res = await login({ email, password: pass });
-    if (!res.success) {
-      showToast(res.error || 'Acesso bloqueado: Este usuário está Inativo.');
+  const handleCheckEmail = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const cleanEmail = loginEmail.trim().toLowerCase();
+    if (!cleanEmail) {
+      showToast('Por favor, insira o seu e-mail.');
       return;
     }
-    const cleanEmail = (email || '').trim().toLowerCase();
-    if (cleanEmail === 'adrmin@cm.com.br' || cleanEmail === 'admin@cm.com.br') {
-      showToast('Bem-vindo, Administrador Casa Magalhães!');
-    } else {
-      showToast('Bem-vindo ao Minhas Ideias na CM!');
+
+    setIsLoading(true);
+    try {
+      const res = await fetch('/api/auth/check-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: cleanEmail }),
+      });
+      const data = await res.json();
+
+      if (!res.ok || !data.success) {
+        showToast(data.error || 'E-mail não localizado no sistema.');
+        return;
+      }
+
+      if (data.name) {
+        setTargetUserName(data.name);
+      }
+
+      if (data.mustChangePassword) {
+        setLoginStep('set_password');
+        showToast('Primeiro acesso detectado: Cadastre sua nova senha.');
+      } else {
+        setLoginStep('password');
+      }
+    } catch (err) {
+      console.error('Erro ao consultar e-mail:', err);
+      showToast('Não foi possível verificar o e-mail no servidor.');
+    } finally {
+      setIsLoading(false);
     }
   };
 
+  const handleExecuteLogin = async (email: string, pass: string) => {
+    if (!pass) {
+      showToast('Por favor, informe sua senha de acesso.');
+      return;
+    }
+    setIsLoading(true);
+    try {
+      const res = await login({ email, password: pass });
+      if (!res.success) {
+        showToast(res.error || 'Acesso bloqueado ou credenciais inválidas.');
+        return;
+      }
+      setLoginEmail('');
+      setLoginPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setTargetUserName('');
+      setShowPassword(false);
+      setShowConfirmPassword(false);
+      setLoginStep('email');
+      setActiveTab('board');
+      setStatusTab('disponiveis');
+      const cleanEmail = (email || '').trim().toLowerCase();
+      if (cleanEmail === 'adrmin@cm.com.br' || cleanEmail === 'admin@cm.com.br') {
+        showToast('Bem-vindo, Administrador Casa Magalhães!');
+      } else {
+        showToast('Bem-vindo ao Minhas Ideias na CM!');
+      }
+    } catch (err) {
+      console.error('Erro ao efetuar login:', err);
+      showToast('Erro de conexão ao realizar login.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleSetInitialPassword = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (newPassword.length < 10) {
+      showToast('A nova senha deve ter no mínimo 10 caracteres.');
+      return;
+    }
+    const hasLetter = /[a-zA-Z]/.test(newPassword);
+    const hasNumber = /[0-9]/.test(newPassword);
+    if (!hasLetter || !hasNumber) {
+      showToast('A nova senha deve ser alfanumérica (conter ao menos uma letra e um número).');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      showToast('As senhas digitadas não coincidem.');
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const res = await fetch('/api/auth/set-initial-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: loginEmail, newPassword }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        showToast(data.error || 'Não foi possível cadastrar a nova senha.');
+        return;
+      }
+
+      if (data.user) {
+        setUser(data.user);
+      }
+      setLoginEmail('');
+      setLoginPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setTargetUserName('');
+      setShowPassword(false);
+      setShowConfirmPassword(false);
+      setLoginStep('email');
+      setActiveTab('board');
+      setStatusTab('disponiveis');
+      showToast('Senha cadastrada com sucesso! Bem-vindo ao Minhas Ideias na CM!');
+    } catch (err) {
+      console.error('Erro ao cadastrar senha:', err);
+      showToast('Não foi possível conectar ao servidor para cadastrar a senha.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleChangeEmail = () => {
+    setLoginStep('email');
+    setLoginPassword('');
+    setNewPassword('');
+    setConfirmPassword('');
+    setShowPassword(false);
+    setShowConfirmPassword(false);
+  };
+
   const handleLogout = async () => {
-    await logout();
     setSelectedIdeaDetailsId(null);
     setCommentsDrawerIdeaId(null);
+    setIdeaToMergeId(null);
+    setCompletingIdeaId(null);
+    setRejectModalOpen(false);
+    setUserModalOpen(false);
+    setEditingUserId(null);
+    const success = await logout();
+    if (success) {
+      setLoginEmail('');
+      setLoginPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setTargetUserName('');
+      setShowPassword(false);
+      setShowConfirmPassword(false);
+      setLoginStep('email');
+      setActiveTab('board');
+      setStatusTab('disponiveis');
+      setSelectedProduct('TODOS');
+      setSelectedCategory('TODOS');
+      setSearchQuery('');
+    } else {
+      showToast('Erro ao encerrar sessão no servidor. Tente novamente.');
+    }
   };
 
   // User Management Handlers
@@ -757,19 +937,7 @@ export default function HomePage() {
   };
 
   const handleCnpjMask = (val: string) => {
-    let value = val.replace(/\D/g, '');
-    if (value.length > 14) value = value.substring(0, 14);
-
-    if (value.length > 12) {
-      value = value.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{1,2})$/, '$1.$2.$3/$4-$5');
-    } else if (value.length > 8) {
-      value = value.replace(/^(\d{2})(\d{3})(\d{3})(\d{1,4})$/, '$1.$2.$3/$4');
-    } else if (value.length > 5) {
-      value = value.replace(/^(\d{2})(\d{3})(\d{1,3})$/, '$1.$2.$3');
-    } else if (value.length > 2) {
-      value = value.replace(/^(\d{2})(\d{1,3})$/, '$1.$2');
-    }
-    setModalUserCnpj(value);
+    setModalUserCnpj(formatCnpj(val));
   };
 
   const toggleUserStatus = async (userId: string) => {
@@ -785,12 +953,12 @@ export default function HomePage() {
 
     // Se estiver ativando, valida se já não existe outro usuário ativo com o mesmo CNPJ
     if (nextStatus === 'active' && targetUser.cnpj) {
-      const cleanCnpjDigits = targetUser.cnpj.replace(/\D/g, '');
+      const cleanCnpjDigits = normalizeCnpj(targetUser.cnpj);
       const ALLOWED_DUPLICATE_CNPJ = '07128945000132';
 
       if (cleanCnpjDigits !== ALLOWED_DUPLICATE_CNPJ) {
         const activeCnpjExists = users.some(
-          (u) => u.id !== userId && u.cnpj && u.cnpj.replace(/\D/g, '') === cleanCnpjDigits && u.status === 'active'
+          (u) => u.id !== userId && u.cnpj && normalizeCnpj(u.cnpj) === cleanCnpjDigits && u.status === 'active'
         );
 
         if (activeCnpjExists) {
@@ -841,8 +1009,13 @@ export default function HomePage() {
       return;
     }
 
+    if (!isValidCnpj(modalUserCnpj)) {
+      setModalUserError('Por favor, informe um CNPJ válido (numérico ou alfanumérico).');
+      return;
+    }
+
     const cleanEmail = modalUserEmail.trim().toLowerCase();
-    const cleanCnpjDigits = modalUserCnpj.replace(/\D/g, '');
+    const cleanCnpjDigits = normalizeCnpj(modalUserCnpj);
     const ALLOWED_DUPLICATE_CNPJ = '07128945000132';
 
     // Validação de duplicidade preventiva com base nos usuários carregados
@@ -855,7 +1028,7 @@ export default function HomePage() {
 
       if (cleanCnpjDigits !== ALLOWED_DUPLICATE_CNPJ) {
         const activeCnpjExists = users.some(
-          (u) => u.cnpj && u.cnpj.replace(/\D/g, '') === cleanCnpjDigits && u.status === 'active'
+          (u) => u.cnpj && normalizeCnpj(u.cnpj) === cleanCnpjDigits && u.status === 'active'
         );
         if (activeCnpjExists) {
           setModalUserError('Já existe um usuário ativo cadastrado com este CNPJ.');
@@ -865,7 +1038,7 @@ export default function HomePage() {
     } else {
       if (cleanCnpjDigits !== ALLOWED_DUPLICATE_CNPJ && modalUserStatus === 'active') {
         const activeCnpjExists = users.some(
-          (u) => u.id !== editingUserId && u.cnpj && u.cnpj.replace(/\D/g, '') === cleanCnpjDigits && u.status === 'active'
+          (u) => u.id !== editingUserId && u.cnpj && normalizeCnpj(u.cnpj) === cleanCnpjDigits && u.status === 'active'
         );
         if (activeCnpjExists) {
           setModalUserError('Já existe um usuário ativo cadastrado com este CNPJ.');
@@ -1008,84 +1181,264 @@ export default function HomePage() {
                 Sua voz constrói o futuro do <span className="text-emerald-700 font-semibold">Varejofacil</span> e <span className="text-teal-700 font-semibold">SysPDV</span>
               </p>
             </div>
-            <form
-              id="login-form"
-              onSubmit={async (e) => {
-                e.preventDefault();
-                setIsLoading(true);
-                try {
-                  await handleExecuteLogin(loginEmail, loginPassword);
-                } finally {
-                  // Caso queira desativar o loading se falhar, ou redirecionar se passar
-                  setIsLoading(false);
-                }
-              }}
-              className="space-y-4 relative z-10"
-            >
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1.5">
-                  E-mail Corporativo
-                </label>
-                <input
-                  id="input-email"
-                  type="email"
-                  required
-                  disabled={isLoading}
-                  value={loginEmail}
-                  onChange={(e) => setLoginEmail(e.target.value)}
-                  className="w-full px-4 py-3 bg-slate-50/80 border border-slate-200 rounded-xl text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white transition-all text-sm shadow-sm disabled:opacity-50"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1.5">
-                  Senha de Acesso
-                </label>
-                <div className="relative">
+            {loginStep === 'email' && (
+              <form
+                id="login-form-email"
+                autoComplete="off"
+                onSubmit={handleCheckEmail}
+                className="space-y-4 relative z-10"
+              >
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1.5">
+                    E-mail 
+                  </label>
                   <input
-                    id="input-password"
-                    type={showPassword ? "text" : "password"}
+                    id="input-email"
+                    type="email"
                     required
+                    autoFocus
                     disabled={isLoading}
-                    value={loginPassword}
-                    onChange={(e) => setLoginPassword(e.target.value)}
-                    className="w-full px-4 py-3 pr-12 bg-slate-50/80 border border-slate-200 rounded-xl text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white transition-all text-sm shadow-sm disabled:opacity-50"
+                    value={loginEmail}
+                    onChange={(e) => setLoginEmail(e.target.value)}
+                    placeholder="Insira o seu e-mail cadastrado no portal"
+                    autoComplete="off"
+                    className="w-full px-4 py-3 bg-slate-50/80 border border-slate-200 rounded-xl text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white transition-all text-sm shadow-sm disabled:opacity-50"
                   />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isLoading || !loginEmail.trim()}
+                  className="w-full py-3.5 px-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:scale-[0.99] text-white font-semibold rounded-xl shadow-lg shadow-emerald-600/20 transition-all text-sm flex items-center justify-center gap-2 cursor-pointer disabled:opacity-75 disabled:cursor-not-allowed"
+                >
+                  {isLoading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Verificando...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>Continuar</span>
+                      <ChevronRight className="w-4 h-4" />
+                    </>
+                  )}
+                </button>
+              </form>
+            )}
+
+            {loginStep === 'password' && (
+              <form
+                id="login-form-password"
+                autoComplete="off"
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  await handleExecuteLogin(loginEmail, loginPassword);
+                }}
+                className="space-y-4 relative z-10"
+              >
+                {/* Badge com e-mail e opção de trocar */}
+                <div className="flex items-center justify-between px-3.5 py-2.5 bg-emerald-50/70 border border-emerald-200/80 rounded-xl text-xs">
+                  <div className="flex flex-col truncate mr-2">
+                    {targetUserName && (
+                      <span className="font-semibold text-slate-800 truncate">{targetUserName}</span>
+                    )}
+                    <span className="text-slate-600 truncate">{loginEmail}</span>
+                  </div>
                   <button
                     type="button"
-                    tabIndex={-1}
+                    onClick={handleChangeEmail}
                     disabled={isLoading}
-                    onClick={() => setShowPassword(!showPassword)}
-                    aria-label={showPassword ? "Ocultar senha" : "Exibir senha"}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 focus:outline-none transition-colors disabled:opacity-50"
+                    className="shrink-0 text-emerald-700 hover:text-emerald-900 font-semibold text-xs underline cursor-pointer hover:opacity-80 transition-opacity"
                   >
-                    {showPassword ? (
-                      <EyeOff className="w-5 h-5" />
-                    ) : (
-                      <Eye className="w-5 h-5" />
-                    )}
+                    Trocar
                   </button>
                 </div>
-              </div>
 
-              <button
-                type="submit"
-                disabled={isLoading}
-                className="w-full py-3.5 px-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:scale-[0.99] text-white font-semibold rounded-xl shadow-lg shadow-emerald-600/20 transition-all text-sm flex items-center justify-center gap-2 cursor-pointer disabled:opacity-75 disabled:cursor-not-allowed"
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1.5">
+                    Senha
+                  </label>
+                  <div className="relative">
+                    <input
+                      id="input-password"
+                      type={showPassword ? "text" : "password"}
+                      required
+                      autoFocus
+                      disabled={isLoading}
+                      value={loginPassword}
+                      onChange={(e) => setLoginPassword(e.target.value)}
+                      placeholder="Insira a senha cadastrada"
+                      autoComplete="current-password"
+                      className="w-full px-4 py-3 pr-12 bg-slate-50/80 border border-slate-200 rounded-xl text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white transition-all text-sm shadow-sm disabled:opacity-50"
+                    />
+                    <button
+                      type="button"
+                      tabIndex={-1}
+                      disabled={isLoading}
+                      onClick={() => setShowPassword(!showPassword)}
+                      aria-label={showPassword ? "Ocultar senha" : "Exibir senha"}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 focus:outline-none transition-colors disabled:opacity-50 cursor-pointer"
+                    >
+                      {showPassword ? (
+                        <EyeOff className="w-5 h-5" />
+                      ) : (
+                        <Eye className="w-5 h-5" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isLoading || !loginPassword}
+                  className="w-full py-3.5 px-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:scale-[0.99] text-white font-semibold rounded-xl shadow-lg shadow-emerald-600/20 transition-all text-sm flex items-center justify-center gap-2 cursor-pointer disabled:opacity-75 disabled:cursor-not-allowed"
+                >
+                  {isLoading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Entrando no Portal...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>Entrar no Portal</span>
+                      <ChevronRight className="w-4 h-4" />
+                    </>
+                  )}
+                </button>
+              </form>
+            )}
+
+            {loginStep === 'set_password' && (
+              <form
+                id="login-form-set-password"
+                autoComplete="off"
+                onSubmit={handleSetInitialPassword}
+                className="space-y-4 relative z-10"
               >
-                {isLoading ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Entrando...</span>
-                  </>
-                ) : (
-                  <>
-                    <span>Entrar no Portal</span>
-                    <ChevronRight className="w-4 h-4" />
-                  </>
-                )}
-              </button>
-            </form>
+                {/* Badge com aviso de primeiro acesso e opção de trocar e-mail */}
+                <div className="flex items-center justify-between px-3.5 py-2.5 bg-amber-50/90 border border-amber-200/90 rounded-xl text-xs">
+                  <div className="flex flex-col truncate mr-2">
+                    <span className="font-semibold text-amber-900">Primeiro Acesso: Cadastre sua senha</span>
+                    <span className="text-amber-700/90 truncate">{loginEmail}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleChangeEmail}
+                    disabled={isLoading}
+                    className="shrink-0 text-amber-800 hover:text-amber-950 font-semibold text-xs underline cursor-pointer hover:opacity-80 transition-opacity"
+                  >
+                    Trocar
+                  </button>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1.5">
+                    Nova Senha
+                  </label>
+                  <div className="relative">
+                    <input
+                      id="input-new-password"
+                      type={showPassword ? "text" : "password"}
+                      required
+                      autoFocus
+                      disabled={isLoading}
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      placeholder="Mínimo 10 caracteres alfanuméricos"
+                      autoComplete="new-password"
+                      className="w-full px-4 py-3 pr-12 bg-slate-50/80 border border-slate-200 rounded-xl text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white transition-all text-sm shadow-sm disabled:opacity-50"
+                    />
+                    <button
+                      type="button"
+                      tabIndex={-1}
+                      disabled={isLoading}
+                      onClick={() => setShowPassword(!showPassword)}
+                      aria-label={showPassword ? "Ocultar senha" : "Exibir senha"}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 focus:outline-none transition-colors disabled:opacity-50 cursor-pointer"
+                    >
+                      {showPassword ? (
+                        <EyeOff className="w-5 h-5" />
+                      ) : (
+                        <Eye className="w-5 h-5" />
+                      )}
+                    </button>
+                  </div>
+
+                  {/* Checklist de validação da senha */}
+                  <div className="mt-2 space-y-1 bg-slate-50 border border-slate-200/80 rounded-xl p-2.5 text-xs">
+                    <div className={`flex items-center gap-1.5 ${newPassword.length >= 10 ? 'text-emerald-600 font-medium' : 'text-slate-500'}`}>
+                      <Check className={`w-3.5 h-3.5 shrink-0 ${newPassword.length >= 10 ? 'opacity-100' : 'opacity-30'}`} />
+                      <span>Pelo menos 10 caracteres</span>
+                    </div>
+                    <div className={`flex items-center gap-1.5 ${/[a-zA-Z]/.test(newPassword) && /[0-9]/.test(newPassword) ? 'text-emerald-600 font-medium' : 'text-slate-500'}`}>
+                      <Check className={`w-3.5 h-3.5 shrink-0 ${/[a-zA-Z]/.test(newPassword) && /[0-9]/.test(newPassword) ? 'opacity-100' : 'opacity-30'}`} />
+                      <span>Alfanumérica (conter letras e números)</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1.5">
+                    Confirme a Nova Senha
+                  </label>
+                  <div className="relative">
+                    <input
+                      id="input-confirm-password"
+                      type={showConfirmPassword ? "text" : "password"}
+                      required
+                      disabled={isLoading}
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      placeholder="Repita a nova senha"
+                      autoComplete="new-password"
+                      className="w-full px-4 py-3 pr-12 bg-slate-50/80 border border-slate-200 rounded-xl text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white transition-all text-sm shadow-sm disabled:opacity-50"
+                    />
+                    <button
+                      type="button"
+                      tabIndex={-1}
+                      disabled={isLoading}
+                      onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                      aria-label={showConfirmPassword ? "Ocultar senha" : "Exibir senha"}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 focus:outline-none transition-colors disabled:opacity-50 cursor-pointer"
+                    >
+                      {showConfirmPassword ? (
+                        <EyeOff className="w-5 h-5" />
+                      ) : (
+                        <Eye className="w-5 h-5" />
+                      )}
+                    </button>
+                  </div>
+                  {confirmPassword.length > 0 && (
+                    <p className={`mt-1.5 text-xs font-medium flex items-center gap-1 ${newPassword === confirmPassword ? 'text-emerald-600' : 'text-rose-500'}`}>
+                      {newPassword === confirmPassword ? '✓ As senhas coincidem' : '✕ As senhas não coincidem'}
+                    </p>
+                  )}
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={
+                    isLoading ||
+                    newPassword.length < 10 ||
+                    !(/[a-zA-Z]/.test(newPassword) && /[0-9]/.test(newPassword)) ||
+                    newPassword !== confirmPassword
+                  }
+                  className="w-full py-3.5 px-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:scale-[0.99] text-white font-semibold rounded-xl shadow-lg shadow-emerald-600/20 transition-all text-sm flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isLoading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Salvando senha...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Lock className="w-4 h-4" />
+                      <span>Cadastrar Senha e Acessar</span>
+                    </>
+                  )}
+                </button>
+              </form>
+            )}
 
           </div>
         </div>
@@ -1613,7 +1966,7 @@ export default function HomePage() {
                         <span className="text-slate-300">•</span>
                         <span>Enviado por {idea.authorName}</span>
                         <span className="text-slate-300">•</span>
-                        <span>{idea.createdAt}</span>
+                        <span>{formatDateBR(idea.createdAt)}</span>
                       </div>
 
                       {/* Dor na Operação */}
@@ -2152,7 +2505,7 @@ export default function HomePage() {
                               {idea.product}
                             </span>
                             <span className="text-xs text-slate-500 font-medium">
-                              Enviado por <strong>{idea.authorName}</strong> ({idea.company}) em {idea.createdAt}
+                              Enviado por <strong>{idea.authorName}</strong> ({idea.company}) em {formatDateBR(idea.createdAt)}
                             </span>
                           </div>
                           <h4 className="text-base font-bold text-slate-900">{idea.title}</h4>
@@ -2655,7 +3008,7 @@ export default function HomePage() {
                     <tr>
                       <th className="py-3.5 px-5">Nome do Usuário / Loja</th>
                       <th className="py-3.5 px-4">CNPJ do Cliente</th>
-                      <th className="py-3.5 px-4">E-mail Corporativo</th>
+                      <th className="py-3.5 px-4">E-mail</th>
                       <th className="py-3.5 px-4">Perfil</th>
                       <th className="py-3.5 px-4 text-center">Status</th>
                       <th className="py-3.5 px-5 text-right">Ações</th>
@@ -2690,7 +3043,7 @@ export default function HomePage() {
                               {u.name}
                             </div>
                             <div className="text-[11px] text-slate-400">
-                              Cadastrado em {u.createdAt || '2026-01-01'}
+                              Cadastrado em {formatDateBR(u.createdAt || '2026-01-01')}
                             </div>
                           </td>
                           <td
@@ -2831,7 +3184,7 @@ export default function HomePage() {
                   </div>
                   <h3 className="text-lg font-bold text-slate-900 leading-snug">{selectedIdeaDetails.title}</h3>
                   <div className="text-xs text-slate-500">
-                    Cadastrado por <strong className="text-slate-700">{selectedIdeaDetails.authorName}</strong> ({selectedIdeaDetails.company})
+                    Cadastrado por <strong className="text-slate-700">{selectedIdeaDetails.authorName}</strong> ({selectedIdeaDetails.company}) • {formatDateBR(selectedIdeaDetails.createdAt)}
                   </div>
                 </div>
 
@@ -3063,7 +3416,7 @@ export default function HomePage() {
                       <div key={comm.id} className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200/70 space-y-1">
                         <div className="flex items-center justify-between text-[11px]">
                           <span className="font-bold text-slate-800">{comm.userName}</span>
-                          <span className="text-slate-400">{comm.date}</span>
+                          <span className="text-slate-400">{formatDateBR(comm.date)}</span>
                         </div>
                         <p className="text-slate-700 leading-relaxed">{comm.text}</p>
                         {comm.attachmentName && (
@@ -3221,7 +3574,7 @@ export default function HomePage() {
                     >
                       <div className="flex items-center justify-between text-[11px]">
                         <span className="font-bold text-slate-800">{comm.userName}</span>
-                        <span className="text-slate-400">{comm.date}</span>
+                        <span className="text-slate-400">{formatDateBR(comm.date)}</span>
                       </div>
                       <p className="text-xs text-slate-700 leading-relaxed whitespace-pre-wrap">{comm.text}</p>
                       {comm.attachmentName && (
@@ -3495,16 +3848,28 @@ export default function HomePage() {
                   value={modalUserCnpj}
                   onChange={(e) => handleCnpjMask(e.target.value)}
                   placeholder="00.000.000/0000-00"
-                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-900 text-xs font-mono focus:ring-2 focus:ring-emerald-500 focus:bg-white focus:outline-none transition-all"
+                  className={`w-full px-3.5 py-2.5 bg-slate-50 border rounded-xl text-slate-900 text-xs font-mono focus:ring-2 focus:bg-white focus:outline-none transition-all ${
+                    normalizeCnpj(modalUserCnpj).length === 14
+                      ? isValidCnpj(modalUserCnpj)
+                        ? 'border-emerald-400 focus:ring-emerald-500'
+                        : 'border-rose-400 focus:ring-rose-500'
+                      : 'border-slate-200 focus:ring-emerald-500'
+                  }`}
                 />
-                <span className="text-[10px] text-slate-400 mt-0.5 block">
-                  Identificação única do parceiro supermercadista.
-                </span>
+                {normalizeCnpj(modalUserCnpj).length === 14 && !isValidCnpj(modalUserCnpj) ? (
+                  <span className="text-[11px] text-rose-600 mt-1 block font-medium">
+                    CNPJ inválido. Verifique os caracteres e dígitos verificadores.
+                  </span>
+                ) : (
+                  <span className="text-[10px] text-slate-400 mt-0.5 block">
+                    Identificação única do parceiro supermercadista.
+                  </span>
+                )}
               </div>
 
               <div>
                 <label className="block font-bold text-slate-700 mb-1">
-                  E-mail Corporativo <span className="text-emerald-600">*</span>
+                  E-mail <span className="text-emerald-600">*</span>
                 </label>
                 <input
                   id="modal-user-email"
