@@ -82,13 +82,6 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const statusParam = searchParams.get('status');
 
-    if (!isSupabaseConfigured()) {
-      const fallbackList = statusParam
-        ? INITIAL_IDEAS.filter((i) => i.status === statusParam)
-        : INITIAL_IDEAS;
-      return NextResponse.json({ success: true, ideas: fallbackList });
-    }
-
     const admin = createAdminClient();
     let query = admin
       .from('ideas')
@@ -167,7 +160,7 @@ export async function POST(request: Request) {
     let category = 'Frente de Loja';
     let painDescription = '';
     let currentWorkaround = '';
-    let cycle = 'Ciclo 2026.2';
+    let cycle = 'Ciclo 2027';
     let clientAuthorName = '';
     let clientAuthorEmail = '';
     let clientCompany = '';
@@ -183,7 +176,7 @@ export async function POST(request: Request) {
       category = (formData.get('category') as string) || 'Frente de Loja';
       painDescription = (formData.get('painDescription') as string) || '';
       currentWorkaround = (formData.get('currentWorkaround') as string) || '';
-      cycle = (formData.get('cycle') as string) || 'Ciclo 2026.2';
+      cycle = (formData.get('cycle') as string) || 'Ciclo 2027';
 
       clientAuthorName = (formData.get('authorName') as string) || '';
       clientAuthorEmail = (formData.get('authorEmail') as string) || '';

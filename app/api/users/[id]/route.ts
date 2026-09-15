@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { User } from '@/types/auth';
 import { isSupabaseConfigured, requireAdmin } from '@/lib/api-helpers';
+import { isValidCnpj, normalizeCnpj } from '@/lib/validation';
 
 // ─── PATCH /api/users/[id] ───────────────────────────────────────────────────
 // Atualiza dados cadastrais do perfil (nome, cnpj, unit, role, status)
@@ -37,10 +38,17 @@ export async function PATCH(
       );
     }
 
+    if (!isValidCnpj(cnpj)) {
+      return NextResponse.json(
+        { success: false, error: 'CNPJ inválido. Por favor, forneça um CNPJ válido.' },
+        { status: 400 }
+      );
+    }
+
     const admin = createAdminClient();
 
     // Verifica se existirá duplicidade de CNPJ ativo ao editar
-    const cleanCnpjDigits = cnpj.replace(/\D/g, '');
+    const cleanCnpjDigits = normalizeCnpj(cnpj);
     const ALLOWED_DUPLICATE_CNPJ = '07128945000132';
 
     if (cleanCnpjDigits !== ALLOWED_DUPLICATE_CNPJ && status === 'active') {
@@ -49,7 +57,7 @@ export async function PATCH(
         .select('id, cnpj, status');
 
       const activeCnpjExists = allProfiles?.some(
-        (p) => p.id !== id && p.cnpj && p.cnpj.replace(/\D/g, '') === cleanCnpjDigits && p.status === 'active'
+        (p) => p.id !== id && p.cnpj && normalizeCnpj(p.cnpj) === cleanCnpjDigits && p.status === 'active'
       );
 
       if (activeCnpjExists) {

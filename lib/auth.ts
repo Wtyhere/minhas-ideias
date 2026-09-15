@@ -10,6 +10,7 @@ export const INITIAL_USERS: User[] = [
     status: 'active',
     createdAt: '2026-01-15',
     unit: 'Loja Matriz - Supermercado Modelo',
+    mustChangePassword: false,
   },
   {
     id: 'usr-2',
@@ -20,6 +21,7 @@ export const INITIAL_USERS: User[] = [
     status: 'active',
     createdAt: '2026-01-01',
     unit: 'P&D Casa Magalhães',
+    mustChangePassword: false,
   },
   {
     id: 'usr-3',
@@ -30,6 +32,7 @@ export const INITIAL_USERS: User[] = [
     status: 'active',
     createdAt: '2026-02-10',
     unit: 'Hipermercado Atlântico',
+    mustChangePassword: true,
   },
   {
     id: 'usr-4',
@@ -40,6 +43,7 @@ export const INITIAL_USERS: User[] = [
     status: 'inactive',
     createdAt: '2026-03-05',
     unit: 'Rede Super Giro',
+    mustChangePassword: true,
   },
 ];
 
@@ -49,7 +53,7 @@ export function authenticateUser(email: string, password?: string): AuthResponse
   if (!cleanEmail) {
     return {
       success: false,
-      error: 'Por favor, insira o seu e-mail corporativo.',
+      error: 'Por favor, insira o seu e-mail.',
     };
   }
 
