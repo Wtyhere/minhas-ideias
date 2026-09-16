@@ -74,7 +74,7 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json();
-    const { name, email, cnpj, unit, role, status, password='1234' } = body;
+    const { name, email, cnpj, unit, role, status, password } = body;
 
     const cleanEmail = (email || '').trim().toLowerCase();
 
