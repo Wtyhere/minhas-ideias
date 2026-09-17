@@ -139,8 +139,8 @@ export default function ForgotPasswordModal({
     const cleanEmail = email.trim().toLowerCase();
     const cleanCode = code.trim();
 
-    if (cleanCode.length < 6 || cleanCode.length > 8) {
-      setError('Por favor, informe o código de verificação recebido por e-mail.');
+    if (cleanCode.length !== 6) {
+      setError('Por favor, informe o código de verificação de 6 dígitos recebido por e-mail.');
       return;
     }
 
@@ -176,8 +176,8 @@ export default function ForgotPasswordModal({
     const cleanEmail = email.trim().toLowerCase();
     const cleanCode = code.trim();
 
-    if (!cleanCode) {
-      setError('Código de verificação ausente. Volte para a etapa anterior.');
+    if (!cleanCode || cleanCode.length !== 6) {
+      setError('Código de verificação de 6 dígitos ausente. Volte para a etapa anterior.');
       return;
     }
 
@@ -412,10 +412,10 @@ export default function ForgotPasswordModal({
                 autoFocus
                 required
                 disabled={isLoading}
-                maxLength={8}
+                maxLength={6}
                 value={code}
                 onChange={(e) => {
-                  const val = e.target.value.replace(/\D/g, '').slice(0, 8);
+                  const val = e.target.value.replace(/\D/g, '').slice(0, 6);
                   setCode(val);
                   if (error) setError(null);
                 }}
@@ -456,7 +456,7 @@ export default function ForgotPasswordModal({
               </button>
               <button
                 type="submit"
-                disabled={isLoading || code.trim().length < 6}
+                disabled={isLoading || code.trim().length !== 6}
                 className="px-5 py-2.5 bg-[#008f5d] hover:bg-[#007a4f] active:scale-[0.99] text-white text-sm font-semibold rounded-2xl shadow-sm transition-all flex items-center gap-2 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 {isLoading ? (

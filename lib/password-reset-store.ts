@@ -49,11 +49,15 @@ export function storeResetCode(
     };
   }
 
-  // Aceita código numérico de 6 a 8 dígitos (como os gerados pelo Supabase) ou gera 6 dígitos
-  const isNumericCode = customCode && /^\d{6,8}$/.test(customCode.trim());
-  const code = isNumericCode
-    ? customCode.trim()
-    : Math.floor(100000 + Math.random() * 900000).toString();
+  // Garante sempre código numérico de exatamente 6 dígitos
+  let code: string;
+  if (customCode && /^\d{6}$/.test(customCode.trim())) {
+    code = customCode.trim();
+  } else if (customCode && /^\d+$/.test(customCode.trim()) && customCode.trim().length >= 6) {
+    code = customCode.trim().slice(0, 6);
+  } else {
+    code = Math.floor(100000 + Math.random() * 900000).toString();
+  }
 
   resetMap.set(cleanEmail, {
     email: cleanEmail,

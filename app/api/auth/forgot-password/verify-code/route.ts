@@ -18,7 +18,7 @@ export async function POST(request: Request) {
       );
     }
 
-    if (!cleanCode) {
+    if (!cleanCode || cleanCode.length !== 6) {
       return NextResponse.json(
         { success: false, error: 'Por favor, informe o código de verificação de 6 dígitos.' },
         { status: 400 }

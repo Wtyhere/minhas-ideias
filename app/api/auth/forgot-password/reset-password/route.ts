@@ -26,9 +26,9 @@ export async function POST(request: Request) {
       );
     }
 
-    if (!cleanCode) {
+    if (!cleanCode || cleanCode.length !== 6) {
       return NextResponse.json(
-        { success: false, error: 'Por favor, informe o código de verificação recebido por e-mail.' },
+        { success: false, error: 'Por favor, informe o código de verificação de 6 dígitos recebido por e-mail.' },
         { status: 400 }
       );
     }
