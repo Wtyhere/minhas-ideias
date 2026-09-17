@@ -39,13 +39,18 @@ import {
   Sparkles,
   Eye, 
   EyeOff,
-  Loader2
+  Loader2,
+  KeyRound,
+  Mail,
+  ArrowLeft,
+  RefreshCw
 } from 'lucide-react';
 import { useAuth } from '@/lib/context/AuthContext';
 import { Idea, Comment, IdeaStatus } from '@/types/idea';
 import { User } from '@/types/auth';
 import { INITIAL_IDEAS } from '@/lib/data';
 import ChangePasswordModal from '../app/components/ChangePassWordModal';
+import ForgotPasswordModal from '../app/components/ForgotPasswordModal';
 import { isValidCnpj, formatCnpj, normalizeCnpj, formatDateBR, formatDateTimeBR } from '@/lib/validation';
 
 const ALLOWED_FILE_EXTENSIONS = ['.xlsx', '.csv', '.pdf', '.png', '.jpg', '.jpeg'];
@@ -135,6 +140,7 @@ export default function HomePage() {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [targetUserName, setTargetUserName] = useState('');
+  const [forgotPasswordModalOpen, setForgotPasswordModalOpen] = useState(false);
 
   // Show password buttons
   const [showPassword, setShowPassword] = useState(false);
@@ -149,6 +155,7 @@ export default function HomePage() {
       setNewPassword('');
       setConfirmPassword('');
       setTargetUserName('');
+      setForgotPasswordModalOpen(false);
       setShowPassword(false);
       setShowConfirmPassword(false);
       setLoginStep('email');
@@ -170,11 +177,23 @@ export default function HomePage() {
   }, [user?.id]);
 
   const [isLoading, setIsLoading] = useState(false);
+  const [forgotPasswordInitialStep, setForgotPasswordInitialStep] = useState<'request' | 'code' | 'new_password'>('request');
+
+  // Detecta se a página foi aberta por link de recuperação do Supabase (#type=recovery ou ?type=recovery)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const hash = window.location.hash || '';
+    const search = window.location.search || '';
+    if (hash.includes('type=recovery') || search.includes('type=recovery')) {
+      setForgotPasswordInitialStep('new_password');
+      setForgotPasswordModalOpen(true);
+    }
+  }, []);
 
   // Toasts
   const [toasts, setToasts] = useState<ToastItem[]>([]);
 
-  const showToast = (message: string) => {
+  const showToast = (message: string, durationMs = 4000) => {
     const id = Date.now();
     setToasts((prev) => [...prev, { id, message, visible: false }]);
 
@@ -191,7 +210,7 @@ export default function HomePage() {
       setTimeout(() => {
         setToasts((prev) => prev.filter((t) => t.id !== id));
       }, 300);
-    }, 3500);
+    }, durationMs);
   };
 
   // Função para lidar com a atualização da senha obrigatória
@@ -1156,7 +1175,7 @@ export default function HomePage() {
     return (
       
       <>
-        <div id="toast-container" className="fixed bottom-5 right-5 z-50 pointer-events-none space-y-2">
+        <div id="toast-container" className="fixed bottom-5 right-5 z-[9999] pointer-events-none space-y-2">
           {toasts.map((t) => (
             <div
               key={t.id}
@@ -1223,6 +1242,16 @@ export default function HomePage() {
                     </>
                   )}
                 </button>
+
+                <div className="text-center pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setForgotPasswordModalOpen(true)}
+                    className="text-xs text-slate-500 hover:text-emerald-700 font-medium hover:underline cursor-pointer transition-colors"
+                  >
+                    Esqueci minha senha
+                  </button>
+                </div>
               </form>
             )}
 
@@ -1255,9 +1284,18 @@ export default function HomePage() {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1.5">
-                    Senha
-                  </label>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600">
+                      Senha
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setForgotPasswordModalOpen(true)}
+                      className="text-xs font-medium text-emerald-700 hover:text-emerald-800 hover:underline cursor-pointer"
+                    >
+                      Esqueci minha senha
+                    </button>
+                  </div>
                   <div className="relative">
                     <input
                       id="input-password"
@@ -1442,6 +1480,50 @@ export default function HomePage() {
 
           </div>
         </div>
+
+        {/* Modal de Esqueci Minha Senha (renderizado no topo do viewport) */}
+        <ForgotPasswordModal
+          isOpen={forgotPasswordModalOpen}
+          onClose={() => setForgotPasswordModalOpen(false)}
+          initialEmail={loginEmail}
+          initialStep={forgotPasswordInitialStep}
+          onReturnToLogin={async (recoveredEmail, recoveredName) => {
+            setForgotPasswordModalOpen(false);
+            setLoginEmail(recoveredEmail);
+            if (recoveredName) {
+              setTargetUserName(recoveredName);
+            }
+            setLoginStep('password');
+            setLoginPassword('');
+            showToast('Senha alterada com sucesso! Digite sua nova senha para acessar.', 5000);
+
+            // Foca automaticamente no campo de digitação da nova senha
+            setTimeout(() => {
+              const passInput = document.getElementById('input-password') as HTMLInputElement | null;
+              if (passInput) {
+                passInput.focus();
+              }
+            }, 100);
+
+            // Se o nome não foi capturado no modal, busca em segundo plano para preencher o badge
+            if (!recoveredName) {
+              try {
+                const res = await fetch('/api/auth/check-email', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ email: recoveredEmail }),
+                });
+                const data = await res.json();
+                if (data.success && data.name) {
+                  setTargetUserName(data.name);
+                }
+              } catch (e) {
+                // Silencia falhas de background
+              }
+            }
+          }}
+          showToast={showToast}
+        />
       </>
     );
   }
@@ -1490,7 +1572,7 @@ export default function HomePage() {
         <ChangePasswordModal onSuccess={handleUpdatePassword} />
       )}
       {/* TOAST NOTIFICATION CONTAINER */}
-      <div id="toast-container" className="fixed bottom-5 right-5 z-50 pointer-events-none space-y-2">
+      <div id="toast-container" className="fixed bottom-5 right-5 z-[9999] pointer-events-none space-y-2">
         {toasts.map((t) => (
           <div
             key={t.id}
