@@ -8,6 +8,7 @@ export interface User {
   cnpj?: string;
   unit?: string;
   mustChangePassword?: boolean;
+  dismissedRejectedIdeaIds?: string[];
 }
 
 export interface LoginCredentials {
