@@ -9,7 +9,7 @@ export async function POST(request: Request) {
     const { email, code } = body as { email?: string; code?: string };
 
     const cleanEmail = (email || '').trim().toLowerCase();
-    const cleanCode = (code || '').trim();
+    const cleanCode = (code || '').replace(/\D/g, '').trim();
 
     if (!cleanEmail) {
       return NextResponse.json(
@@ -38,9 +38,31 @@ export async function POST(request: Request) {
         });
         if (!otpError && otpData.user) {
           isValid = true;
+        } else if (otpError) {
+          console.warn('[verify-code] supabase.auth.verifyOtp notice:', otpError.message);
         }
       } catch (e) {
-        console.warn('[verify-code] Erro verifyOtp:', e);
+        console.warn('[verify-code] Erro supabase verifyOtp:', e);
+      }
+
+      // Se falhou no supabase server client, tenta via admin client
+      if (!isValid) {
+        try {
+          const { createAdminClient } = await import('@/lib/supabase/admin');
+          const admin = createAdminClient();
+          const { data: adminOtpData, error: adminOtpError } = await admin.auth.verifyOtp({
+            email: cleanEmail,
+            token: cleanCode,
+            type: 'recovery',
+          });
+          if (!adminOtpError && adminOtpData.user) {
+            isValid = true;
+          } else if (adminOtpError) {
+            console.warn('[verify-code] admin.auth.verifyOtp notice:', adminOtpError.message);
+          }
+        } catch (e) {
+          console.warn('[verify-code] Erro admin verifyOtp:', e);
+        }
       }
     }
 
@@ -60,7 +82,7 @@ export async function POST(request: Request) {
     }
 
     const { markCodeAsVerified } = await import('@/lib/password-reset-store');
-    markCodeAsVerified(cleanEmail);
+    markCodeAsVerified(cleanEmail, cleanCode);
 
     return NextResponse.json({
       success: true,

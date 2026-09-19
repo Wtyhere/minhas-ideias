@@ -110,14 +110,14 @@ export default function ForgotPasswordModal({
       }
 
       setStep('code');
-      setResendCooldown(30);
+      setResendCooldown(60);
       setCode('');
       setError(null);
 
       if (data.debugCode) {
         showToast(`Código de verificação enviado! Código de teste: ${data.debugCode}`, 10000);
       } else {
-        showToast('Código de verificação enviado! Verifique sua caixa de entrada.', 5000);
+        showToast('Código de verificação enviado! Verifique sua caixa de entrada e spam.', 6000);
       }
     } catch (err) {
       console.error('Erro ao enviar código de recuperação:', err);

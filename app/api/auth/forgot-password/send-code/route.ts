@@ -3,7 +3,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient as createSupabaseServerClient } from '@/lib/supabase/server';
 import { INITIAL_USERS } from '@/lib/auth';
 import { isSupabaseConfigured } from '@/lib/api-helpers';
-import { storeResetCode } from '@/lib/password-reset-store';
+import { storeResetCode, checkResetCooldown } from '@/lib/password-reset-store';
 import { sendPasswordResetEmail } from '@/lib/mailer';
 
 export async function POST(request: Request) {
@@ -78,60 +78,104 @@ export async function POST(request: Request) {
         );
       }
 
-      // 1. Dispara o envio do e-mail de recuperação diretamente pelo Supabase Auth
-      let supabaseSendError: string | null = null;
-      try {
-        const supabase = await createSupabaseServerClient();
-        const { error: resetEmailError } = await supabase.auth.resetPasswordForEmail(cleanEmail);
-        if (resetEmailError) {
-          console.warn('[send-code] Supabase resetPasswordForEmail warning:', resetEmailError.message);
-          if ((resetEmailError as any).status === 429) {
-            return NextResponse.json(
-              { success: false, error: 'Aguarde alguns instantes antes de solicitar um novo código.' },
-              { status: 429 }
-            );
-          }
-          supabaseSendError = resetEmailError.message;
-        }
-      } catch (err: any) {
-        console.warn('[send-code] Erro resetPasswordForEmail:', err);
-        supabaseSendError = err.message || 'Erro ao conectar ao serviço de e-mail do Supabase.';
-      }
-
-      // 2. Gera OTP / link de recuperação pelo Supabase Admin para registro e validação resiliente
-      let generatedOtp: string | undefined;
-      try {
-        const { data: linkData, error: linkError } = await admin.auth.admin.generateLink({
-          type: 'recovery',
-          email: cleanEmail,
-        });
-
-        if (linkError) {
-          console.warn('[send-code] Aviso ao gerar link recovery Supabase:', linkError.message);
-        } else if (linkData?.properties?.email_otp) {
-          generatedOtp = linkData.properties.email_otp.trim();
-        }
-      } catch (err) {
-        console.warn('[send-code] Erro generateLink:', err);
-      }
-
-      // 3. Registra código no repositório de redefinição
-      const storeResult = storeResetCode(cleanEmail, generatedOtp);
-      if (!storeResult.success) {
+      // 0. Verifica cooldown local (30 segundos entre solicitações)
+      const cooldownCheck = checkResetCooldown(cleanEmail);
+      if (!cooldownCheck.allowed) {
         return NextResponse.json(
-          { success: false, error: storeResult.error },
+          { success: false, error: cooldownCheck.error },
           { status: 429 }
         );
       }
 
-      const finalCode = storeResult.code;
+      // 1. Dispara o envio do e-mail de recuperação diretamente pelo Supabase Auth
+      try {
+        const supabase = await createSupabaseServerClient();
+        const { error: resetEmailError } = await supabase.auth.resetPasswordForEmail(cleanEmail);
+
+        if (resetEmailError) {
+          console.warn('[send-code] Supabase resetPasswordForEmail warning:', resetEmailError.message);
+
+          const isRateLimit =
+            (resetEmailError as any).status === 429 ||
+            resetEmailError.message.toLowerCase().includes('rate limit') ||
+            resetEmailError.message.toLowerCase().includes('security purposes') ||
+            resetEmailError.message.toLowerCase().includes('seconds');
+
+          if (isRateLimit) {
+            const secondsMatch = resetEmailError.message.match(/(\d+)\s+seconds/i);
+            const remainingSecs = secondsMatch ? ` mais ${secondsMatch[1]} segundos` : ' alguns instantes';
+            return NextResponse.json(
+              {
+                success: false,
+                error: `Por motivos de segurança, aguarde${remainingSecs} antes de solicitar um novo código.`,
+              },
+              { status: 429 }
+            );
+          }
+
+          // Se falhou por outro motivo e temos SMTP customizado configurado no ambiente:
+          if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
+            console.log('[send-code] Fallback para envio via SMTP customizado...');
+            const { data: linkData, error: linkError } = await admin.auth.admin.generateLink({
+              type: 'recovery',
+              email: cleanEmail,
+            });
+
+            const customOtp = linkData?.properties?.email_otp?.trim();
+            if (linkError || !customOtp) {
+              return NextResponse.json(
+                { success: false, error: 'Não foi possível gerar o código de recuperação.' },
+                { status: 500 }
+              );
+            }
+
+            const storeResult = storeResetCode(cleanEmail, customOtp);
+            if (!storeResult.success) {
+              return NextResponse.json(
+                { success: false, error: storeResult.error },
+                { status: 429 }
+              );
+            }
+
+            await sendPasswordResetEmail({
+              to: cleanEmail,
+              name: userName,
+              code: customOtp,
+            });
+
+            return NextResponse.json({
+              success: true,
+              message: 'Código de recuperação enviado para o seu e-mail.',
+              email: cleanEmail,
+              name: userName || undefined,
+            });
+          }
+
+          return NextResponse.json(
+            {
+              success: false,
+              error: 'Não foi possível enviar o e-mail de recuperação no momento. Tente novamente mais tarde.',
+            },
+            { status: 500 }
+          );
+        }
+      } catch (err: any) {
+        console.error('[send-code] Erro resetPasswordForEmail:', err);
+        return NextResponse.json(
+          { success: false, error: 'Erro ao conectar ao serviço de envio de e-mails.' },
+          { status: 500 }
+        );
+      }
+
+      // Supabase enviou o e-mail com sucesso!
+      // NÃO chamamos admin.auth.admin.generateLink aqui para NÃO invalidar o código enviado ao e-mail!
+      storeResetCode(cleanEmail);
 
       return NextResponse.json({
         success: true,
         message: 'Código de recuperação enviado para o seu e-mail.',
         email: cleanEmail,
         name: userName || undefined,
-        debugCode: finalCode,
       });
     }
 

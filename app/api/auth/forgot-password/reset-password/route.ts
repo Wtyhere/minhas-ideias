@@ -17,7 +17,7 @@ export async function POST(request: Request) {
     };
 
     const cleanEmail = (email || '').trim().toLowerCase();
-    const cleanCode = (code || '').trim();
+    const cleanCode = (code || '').replace(/\D/g, '').trim();
 
     if (!cleanEmail) {
       return NextResponse.json(
@@ -77,6 +77,22 @@ export async function POST(request: Request) {
         }
       } catch (e) {
         console.warn('[reset-password] Erro no fallback verifyOtp:', e);
+      }
+
+      if (!codeIsValid) {
+        try {
+          const admin = createAdminClient();
+          const { data: adminOtpData, error: adminOtpError } = await admin.auth.verifyOtp({
+            email: cleanEmail,
+            token: cleanCode,
+            type: 'recovery',
+          });
+          if (!adminOtpError && adminOtpData.user) {
+            codeIsValid = true;
+          }
+        } catch (e) {
+          console.warn('[reset-password] Erro no fallback admin verifyOtp:', e);
+        }
       }
     }
 

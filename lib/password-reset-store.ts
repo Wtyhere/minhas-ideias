@@ -25,8 +25,34 @@ if (process.env.NODE_ENV !== 'production') {
 }
 
 const CODE_EXPIRATION_MS = 15 * 60 * 1000; // 15 minutos
-const MIN_RESEND_INTERVAL_MS = 30 * 1000; // 30 segundos entre reenvios
+const MIN_RESEND_INTERVAL_MS = 60 * 1000; // 60 segundos entre reenvios (alinhado ao rate limit do Supabase Auth)
 const MAX_ATTEMPTS = 5;
+
+/**
+ * Verifica se o reenvio de código para o e-mail está bloqueado por cooldown (30s).
+ */
+export function checkResetCooldown(email: string): {
+  allowed: boolean;
+  remainingSeconds?: number;
+  error?: string;
+} {
+  const cleanEmail = email.trim().toLowerCase();
+  const now = Date.now();
+  const existing = resetMap.get(cleanEmail);
+
+  if (existing && now - existing.lastSentAt < MIN_RESEND_INTERVAL_MS) {
+    const remainingSeconds = Math.ceil(
+      (MIN_RESEND_INTERVAL_MS - (now - existing.lastSentAt)) / 1000
+    );
+    return {
+      allowed: false,
+      remainingSeconds,
+      error: `Aguarde ${remainingSeconds} segundos antes de solicitar um novo código.`,
+    };
+  }
+
+  return { allowed: true };
+}
 
 /**
  * Gera ou registra um código de verificação para o e-mail informado.
@@ -125,11 +151,26 @@ export function verifyResetCode(
 /**
  * Marca o código de recuperação como verificado.
  */
-export function markCodeAsVerified(email: string): void {
+export function markCodeAsVerified(email: string, code?: string): void {
   const cleanEmail = email.trim().toLowerCase();
+  const now = Date.now();
   const record = resetMap.get(cleanEmail);
+
   if (record) {
     record.verified = true;
+    record.expiresAt = Math.max(record.expiresAt, now + CODE_EXPIRATION_MS);
+    if (code) {
+      record.code = code;
+    }
+  } else {
+    resetMap.set(cleanEmail, {
+      email: cleanEmail,
+      code: code || '',
+      expiresAt: now + CODE_EXPIRATION_MS,
+      lastSentAt: now,
+      attempts: 0,
+      verified: true,
+    });
   }
 }
 
