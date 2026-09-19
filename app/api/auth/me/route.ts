@@ -1,6 +1,7 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { createClient as createSupabaseServerClient } from '@/lib/supabase/server';
+import { getDismissedRejectedFromStore } from '@/lib/dismissed-rejected-store';
 import { User } from '@/types/auth';
 
 function isSupabaseConfigured(): boolean {
@@ -48,6 +49,14 @@ export async function GET() {
           unit: profile?.unit || supaUser.user_metadata?.unit,
           createdAt: profile?.created_at || supaUser.created_at,
           mustChangePassword: profile?.must_change_password ?? false,
+          dismissedRejectedIdeaIds: Array.from(
+            new Set([
+              ...(Array.isArray(supaUser.user_metadata?.dismissed_rejected_idea_ids)
+                ? supaUser.user_metadata.dismissed_rejected_idea_ids
+                : []),
+              ...getDismissedRejectedFromStore(cleanEmail),
+            ])
+          ),
         };
 
         return NextResponse.json({ authenticated: true, user });
@@ -62,6 +71,12 @@ export async function GET() {
     }
 
     const user = JSON.parse(sessionCookie.value) as User;
+    user.dismissedRejectedIdeaIds = Array.from(
+      new Set([
+        ...(Array.isArray(user.dismissedRejectedIdeaIds) ? user.dismissedRejectedIdeaIds : []),
+        ...getDismissedRejectedFromStore(user.email),
+      ])
+    );
     return NextResponse.json({ authenticated: true, user });
   } catch {
     return NextResponse.json({ authenticated: false, user: null });

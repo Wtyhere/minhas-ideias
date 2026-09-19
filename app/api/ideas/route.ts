@@ -3,7 +3,6 @@ import { NextResponse } from 'next/server';
 import { createClient as createSupabaseServerClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { isSupabaseConfigured } from '@/lib/api-helpers';
-import { INITIAL_IDEAS } from '@/lib/data';
 import { Idea, Attachment } from '@/types/idea';
 import { User } from '@/types/auth';
 
@@ -100,14 +99,14 @@ export async function GET(request: Request) {
         console.warn('[GET /api/ideas] Tabela public.ideas não encontrada no Supabase.');
         return NextResponse.json({
           success: true,
-          ideas: statusParam ? [] : INITIAL_IDEAS,
+          ideas: [],
           tableMissing: true,
           warning: 'Tabela public.ideas não encontrada no Supabase. Execute o arquivo supabase/schema.sql no SQL Editor.'
         });
       }
 
       console.error('[GET /api/ideas] Erro ao buscar ideias no Supabase:', error);
-      return NextResponse.json({ success: true, ideas: statusParam ? [] : INITIAL_IDEAS });
+      return NextResponse.json({ success: true, ideas: [] });
     }
 
     // Mapeia colunas do banco (snake_case) para a tipagem Idea (camelCase)

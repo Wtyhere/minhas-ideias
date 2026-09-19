@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { createClient as createSupabaseServerClient } from '@/lib/supabase/server';
 import { authenticateUser } from '@/lib/auth';
 import { User } from '@/types/auth';
+import { getDismissedRejectedFromStore } from '@/lib/dismissed-rejected-store';
 
 function isSupabaseConfigured(): boolean {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -107,6 +108,14 @@ export async function POST(request: Request) {
           data.user.created_at ||
           new Date().toISOString().split('T')[0],
         mustChangePassword: profile?.must_change_password ?? false,
+        dismissedRejectedIdeaIds: Array.from(
+          new Set([
+            ...(Array.isArray(data.user.user_metadata?.dismissed_rejected_idea_ids)
+              ? data.user.user_metadata.dismissed_rejected_idea_ids
+              : []),
+            ...getDismissedRejectedFromStore(cleanEmail),
+          ])
+        ),
       };
 
       const cookieStore = await cookies();
@@ -134,8 +143,13 @@ export async function POST(request: Request) {
       );
     }
 
+    const userWithDismissed: User = {
+      ...result.user,
+      dismissedRejectedIdeaIds: getDismissedRejectedFromStore(cleanEmail),
+    };
+
     const cookieStore = await cookies();
-    cookieStore.set('cm_session', JSON.stringify(result.user), {
+    cookieStore.set('cm_session', JSON.stringify(userWithDismissed), {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
@@ -145,7 +159,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       success: true,
-      user: result.user,
+      user: userWithDismissed,
     });
   } catch (err) {
     console.error('Erro na autenticação Supabase:', err);

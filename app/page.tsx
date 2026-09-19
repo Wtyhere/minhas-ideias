@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Lightbulb,
@@ -45,14 +45,18 @@ import {
   ArrowLeft,
   RefreshCw,
   LayoutGrid,
-  List
+  List,
+  User as UserIcon,
+  AlertTriangle,
+  XCircle,
+  ExternalLink
 } from 'lucide-react';
 import { useAuth } from '@/lib/context/AuthContext';
 import { Idea, Comment, IdeaStatus } from '@/types/idea';
 import { User } from '@/types/auth';
-import { INITIAL_IDEAS } from '@/lib/data';
 import ChangePasswordModal from '../app/components/ChangePassWordModal';
 import ForgotPasswordModal from '../app/components/ForgotPasswordModal';
+import Pagination from '../app/components/Pagination';
 import { isValidCnpj, formatCnpj, normalizeCnpj, formatDateBR, formatDateTimeBR } from '@/lib/validation';
 
 const ALLOWED_FILE_EXTENSIONS = ['.xlsx', '.csv', '.pdf', '.png', '.jpg', '.jpeg'];
@@ -109,7 +113,47 @@ export default function HomePage() {
   const [usersFetched, setUsersFetched] = useState(false);
   const [activeTab, setActiveTab] = useState<'board' | 'new-idea' | 'admin-review' | 'prioritization' | 'users'>('board');
   const [statusTab, setStatusTab] = useState<'disponiveis' | 'desenvolvimento' | 'entregues' | 'minhas'>('disponiveis');
+  const [myIdeasSubFilter, setMyIdeasSubFilter] = useState<'ALL' | 'voting' | 'merged' | 'in_development' | 'delivered' | 'rejected'>('ALL');
   const [selectedProduct, setSelectedProduct] = useState<'TODOS' | 'Varejofacil'>('TODOS');
+  const [dismissedRejectedIdeaIds, setDismissedRejectedIdeaIds] = useState<string[]>([]);
+  const [sessionDismissedBanner, setSessionDismissedBanner] = useState<boolean>(false);
+
+  // Carrega do localStorage e sincroniza com a conta do usuário no servidor (cross-browser)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const cleanEmail = user?.email?.trim().toLowerCase();
+    const storageKey = cleanEmail
+      ? `cm_dismissed_rejected_ids_${cleanEmail}`
+      : 'cm_dismissed_rejected_ids_default';
+
+    let localIds: string[] = [];
+    try {
+      const saved = localStorage.getItem(storageKey);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          localIds = parsed;
+        }
+      }
+    } catch {
+      localIds = [];
+    }
+
+    const serverIds = Array.isArray(user?.dismissedRejectedIdeaIds)
+      ? user.dismissedRejectedIdeaIds
+      : [];
+
+    const unified = Array.from(new Set([...localIds, ...serverIds]));
+    setDismissedRejectedIdeaIds(unified);
+
+    if (unified.length > 0 && unified.length > localIds.length) {
+      try {
+        localStorage.setItem(storageKey, JSON.stringify(unified));
+      } catch {
+        // Ignora
+      }
+    }
+  }, [user?.email, user?.dismissedRejectedIdeaIds]);
   const [selectedCategory, setSelectedCategory] = useState<string>('TODOS');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [viewMode, setViewMode] = useState<'cards' | 'list'>('cards');
@@ -158,6 +202,8 @@ export default function HomePage() {
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [userSearchQuery, setUserSearchQuery] = useState<string>('');
   const [userStatusFilter, setUserStatusFilter] = useState<string>('TODOS');
+  const [userCurrentPage, setUserCurrentPage] = useState<number>(1);
+  const [userItemsPerPage, setUserItemsPerPage] = useState<number>(10);
 
   // User Modal form fields
   const [modalUserName, setModalUserName] = useState('');
@@ -216,6 +262,12 @@ export default function HomePage() {
       setSelectedProduct('TODOS');
       setSelectedCategory('TODOS');
       setSearchQuery('');
+      setUserSearchQuery('');
+      setUserStatusFilter('TODOS');
+      setUserCurrentPage(1);
+      setMyIdeasSubFilter('ALL');
+      setDismissedRejectedIdeaIds([]);
+      setSessionDismissedBanner(false);
     }
     prevUserRef.current = user;
   }, [user]);
@@ -1187,15 +1239,50 @@ export default function HomePage() {
     }
   };
 
+  // Filtro de usuários memoizado
+  const filteredUsers = useMemo(() => {
+    return users.filter((u) => {
+      if (userStatusFilter !== 'TODOS' && u.status !== userStatusFilter) return false;
+      if (userSearchQuery.trim()) {
+        const q = userSearchQuery.toLowerCase();
+        const matchName = (u.name || '').toLowerCase().includes(q);
+        const matchCnpj = (u.cnpj || '').toLowerCase().includes(q);
+        const matchEmail = (u.email || '').toLowerCase().includes(q);
+        if (!matchName && !matchCnpj && !matchEmail) return false;
+      }
+      return true;
+    });
+  }, [users, userStatusFilter, userSearchQuery]);
+
+  const totalUserPages = Math.max(1, Math.ceil(filteredUsers.length / userItemsPerPage));
+  const safeUserCurrentPage = Math.min(Math.max(1, userCurrentPage), totalUserPages);
+
+  // Lista paginada de usuários para a página atual
+  const paginatedUsers = useMemo(() => {
+    const startIndex = (safeUserCurrentPage - 1) * userItemsPerPage;
+    return filteredUsers.slice(startIndex, startIndex + userItemsPerPage);
+  }, [filteredUsers, safeUserCurrentPage, userItemsPerPage]);
+
   // Filter ideas logic matching index.html getFilteredIdeas()
   const getFilteredIdeas = () => {
     return ideas.filter((idea) => {
       if (statusTab === 'minhas') {
         // Aba do usuário para acompanhar todas as suas demandas (inclusive as recusadas na triagem)
         if (!isIdeaAuthor(idea)) return false;
+
+        if (myIdeasSubFilter === 'voting' && idea.status !== 'voting') return false;
+        if (myIdeasSubFilter === 'merged' && idea.status !== 'merged') return false;
+        if (
+          myIdeasSubFilter === 'in_development' &&
+          !['in_immersion', 'in_development', 'in_validation', 'in_pilot'].includes(idea.status)
+        ) {
+          return false;
+        }
+        if (myIdeasSubFilter === 'delivered' && idea.status !== 'delivered') return false;
+        if (myIdeasSubFilter === 'rejected' && idea.status !== 'rejected') return false;
       } else {
-        // O Mural de Ideias público exibe apenas demandas já aprovadas (nunca em triagem ou recusadas)
-        if (idea.status === 'pending_review' || idea.status === 'rejected') return false;
+        // O Mural de Ideias público exibe apenas demandas já aprovadas (nunca em triagem, recusadas ou agrupadas)
+        if (idea.status === 'pending_review' || idea.status === 'rejected' || idea.status === 'merged') return false;
 
         if (statusTab === 'disponiveis') {
           if (idea.status !== 'voting') return false;
@@ -1228,6 +1315,335 @@ export default function HomePage() {
       }
       return true;
     });
+  };
+
+  // Renderizador especializado para Ideias Agrupadas (obedece visualização em Cards ou Lista conforme agrupados.png)
+  const renderMergedIdeaCard = (idea: Idea, isCardsMode: boolean) => {
+    const mainDemand = idea.mergedIntoId ? ideas.find((i) => i.id === idea.mergedIntoId) : null;
+    const mainVotes = mainDemand ? mainDemand.votes : idea.votes;
+    const { score: mainScore } = getVoteCounts(mainVotes);
+    const consolidatedScore = Math.max(0, mainScore);
+
+    if (isCardsMode) {
+      // Modo Cards: Card vertical proporcional para o grid de colunas (grid-cols-1 md:grid-cols-2 xl:grid-cols-3)
+      return (
+        <div
+          key={idea.id}
+          className="bg-white border border-slate-200/80 hover:border-purple-300 rounded-3xl p-5 sm:p-6 transition-all hover:shadow-md hover:shadow-purple-950/5 group flex flex-col justify-between gap-3 shadow-xs"
+        >
+          <div>
+            {/* Topo do Card */}
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-bold px-3 py-1 rounded-full border bg-emerald-50 text-emerald-800 border-emerald-200">
+                  {idea.product}
+                </span>
+
+                <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200 flex items-center gap-1">
+                  <Tag className="w-3 h-3 text-slate-400" />
+                  <span>{idea.category}</span>
+                </span>
+              </div>
+
+              <span className="text-xs font-bold px-3 py-1 rounded-full border bg-purple-50 text-purple-700 border-purple-200">
+                Agrupada
+              </span>
+            </div>
+
+            {/* Título */}
+            <h3
+              onClick={() => setSelectedIdeaDetailsId(idea.id)}
+              className="text-base font-bold text-slate-900 group-hover:text-purple-700 transition-colors cursor-pointer leading-snug line-clamp-2 mt-2"
+            >
+              {idea.title}
+            </h3>
+
+            {/* Autor e Loja */}
+            <div className="text-xs text-slate-500 mt-2 flex items-center gap-1.5 truncate">
+              <Store className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+              <span className="text-slate-700 font-medium truncate">{idea.company}</span>
+              <span className="text-slate-300">•</span>
+              <span className="shrink-0">{formatDateBR(idea.createdAt)}</span>
+            </div>
+
+            {/* Dor na Operação */}
+            <div className="mt-3.5 bg-rose-50/50 p-3.5 rounded-2xl border border-rose-100/80 flex-1 flex flex-col justify-start">
+              <span className="text-[11px] font-bold text-rose-700 uppercase tracking-wider block mb-1">
+                DOR NA OPERAÇÃO:
+              </span>
+              <p className="text-xs sm:text-[13px] text-slate-700 leading-relaxed line-clamp-3">
+                {idea.painDescription}
+              </p>
+            </div>
+
+            {/* Demanda Principal Vinculada (Formato Card compacto) */}
+            <div className="mt-3 bg-[#FAF5FF]/80 border border-purple-200/80 rounded-2xl p-3.5 space-y-2.5">
+              <div className="flex items-start gap-2.5">
+                <div className="w-7 h-7 rounded-lg bg-[#7C3AED] text-white flex items-center justify-center shrink-0 shadow-xs mt-0.5">
+                  <Layers className="w-4 h-4 text-white" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <span className="text-[10px] font-extrabold text-purple-700 uppercase tracking-wider block">
+                    DEMANDA PRINCIPAL:
+                  </span>
+                  <h4
+                    onClick={() => (mainDemand ? setSelectedIdeaDetailsId(mainDemand.id) : setSelectedIdeaDetailsId(idea.id))}
+                    className="text-xs font-bold text-slate-900 hover:text-purple-700 transition-colors cursor-pointer leading-snug line-clamp-2"
+                  >
+                    {mainDemand?.title || 'Demanda Principal Vinculada'}
+                  </h4>
+                </div>
+              </div>
+
+              <p className="text-[11px] text-purple-900/80 leading-relaxed line-clamp-2">
+                Sua dor foi unificada a esta demanda no{' '}
+                <strong className="font-bold text-purple-950">
+                  {mainDemand?.product || idea.product || 'Varejofacil'}
+                </strong>.
+              </p>
+
+              <div className="flex items-center justify-between gap-2 pt-2 border-t border-purple-100/80">
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border bg-emerald-50 text-emerald-700 border-emerald-300 shadow-2xs">
+                  {mainDemand?.status === 'voting'
+                    ? 'Em Votação'
+                    : mainDemand
+                    ? getStatusLabel(mainDemand.status)
+                    : 'Em Votação'}
+                </span>
+
+                <button
+                  type="button"
+                  onClick={() => (mainDemand ? setSelectedIdeaDetailsId(mainDemand.id) : setSelectedIdeaDetailsId(idea.id))}
+                  className="px-2.5 py-1 bg-[#7C3AED] hover:bg-[#6D28D9] text-white text-[11px] font-bold rounded-lg shadow-xs flex items-center gap-1 cursor-pointer transition-all shrink-0 hover:shadow-sm"
+                >
+                  <ExternalLink className="w-3 h-3" />
+                  <span>Ver Demanda</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Insumos / Anexos */}
+            {idea.attachments && idea.attachments.length > 0 && (
+              <div className="mt-3 flex items-center gap-1.5 text-xs text-slate-500">
+                <Paperclip className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                <span className="font-semibold text-slate-700">
+                  {idea.attachments.length} anexo(s) disponível(is)
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* Rodapé do Card */}
+          <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2 mt-auto">
+            {/* Botão Comentários */}
+            <button
+              type="button"
+              onClick={() => setCommentsDrawerIdeaId(idea.id)}
+              className="px-3 py-1.5 rounded-xl text-xs font-bold text-slate-700 hover:text-emerald-800 bg-slate-50 hover:bg-emerald-50/70 border border-slate-200 transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs"
+              title="Ver comentários no painel lateral"
+            >
+              <MessageSquare className="w-4 h-4 text-emerald-600" />
+              <span>{idea.comments.length}</span>
+            </button>
+
+            {/* Votos Consolidados */}
+            <div
+              className="text-xs text-slate-600 font-medium px-2.5 py-1 bg-slate-50 rounded-xl border border-slate-200 flex items-center gap-1 select-none"
+              title="Votos consolidados da demanda principal"
+            >
+              <span className="text-slate-900 font-bold">{consolidatedScore}</span>
+              <span className="hidden sm:inline">votos consolidados</span>
+              <span className="sm:hidden">votos</span>
+            </div>
+
+            {/* Botão Detalhes */}
+            <button
+              type="button"
+              onClick={() => setSelectedIdeaDetailsId(idea.id)}
+              className="text-xs font-bold text-emerald-700 hover:text-emerald-800 flex items-center gap-0.5 cursor-pointer hover:underline ml-auto"
+            >
+              <span>Detalhes</span>
+              <ChevronRight className="w-4 h-4 stroke-[2.5]" />
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // Modo Lista: Card horizontal/linha em largura completa (EXATAMENTE conforme agrupados.png)
+    return (
+      <div
+        key={idea.id}
+        className="bg-white border border-slate-200/80 hover:border-purple-300 rounded-3xl p-5 sm:p-6 transition-all hover:shadow-md hover:shadow-purple-950/5 group flex flex-col justify-between gap-4 shadow-xs"
+      >
+        <div>
+          {/* Topo do Card: Badges Varejofacil, Setor, Ciclo e Agrupada */}
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-bold px-3 py-1 rounded-full border bg-emerald-50 text-emerald-800 border-emerald-200">
+                {idea.product}
+              </span>
+
+              <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200 flex items-center gap-1">
+                <Tag className="w-3 h-3 text-slate-400" />
+                <span>{idea.category}</span>
+              </span>
+
+              {idea.cycle && (
+                <span className="text-xs text-slate-400 font-normal">
+                  • {idea.cycle}
+                </span>
+              )}
+            </div>
+
+            <span className="text-xs font-bold px-3 py-1 rounded-full border bg-purple-50 text-purple-700 border-purple-200">
+              Agrupada
+            </span>
+          </div>
+
+          {/* Título da Ideia Agrupada */}
+          <h3
+            onClick={() => setSelectedIdeaDetailsId(idea.id)}
+            className="text-base sm:text-lg font-bold text-slate-900 group-hover:text-purple-700 transition-colors cursor-pointer leading-snug mt-1"
+          >
+            {idea.title}
+          </h3>
+
+          {/* Empresa/Loja, Autor e Data */}
+          <div className="text-xs text-slate-500 mt-1.5 flex flex-wrap items-center gap-2">
+            <span className="flex items-center gap-1.5 text-slate-700 font-medium">
+              <Store className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+              <span>{idea.company}</span>
+            </span>
+            <span className="text-slate-300">•</span>
+            <span>Enviado por {idea.authorName}</span>
+            <span className="text-slate-300">•</span>
+            <span>{formatDateBR(idea.createdAt)}</span>
+          </div>
+
+          {/* Box Dor na Operação */}
+          <div className="mt-3.5 bg-rose-50/40 p-4 rounded-2xl border border-rose-100/80">
+            <span className="text-[11px] font-bold text-rose-700 uppercase tracking-wider block mb-1">
+              DOR NA OPERAÇÃO:
+            </span>
+            <p className="text-xs sm:text-sm text-slate-700 leading-relaxed">
+              {idea.painDescription}
+            </p>
+          </div>
+
+          {/* Box DEMANDA PRINCIPAL VINCULADA À SUA IDEIA */}
+          <div className="mt-3.5 bg-[#FAF5FF]/70 border border-purple-200/80 rounded-2xl p-4 sm:p-5 flex flex-col gap-3.5">
+            {/* Linha superior: Ícone Layers + Título e Badge de Status */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-start sm:items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-[#7C3AED] text-white flex items-center justify-center shrink-0 shadow-xs">
+                  <Layers className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <span className="text-[11px] font-extrabold text-purple-700 uppercase tracking-wider block">
+                    DEMANDA PRINCIPAL VINCULADA À SUA IDEIA:
+                  </span>
+                  <h4
+                    onClick={() => {
+                      if (mainDemand) {
+                        setSelectedIdeaDetailsId(mainDemand.id);
+                      } else {
+                        setSelectedIdeaDetailsId(idea.id);
+                      }
+                    }}
+                    className="text-sm sm:text-base font-bold text-slate-900 hover:text-purple-700 transition-colors cursor-pointer leading-tight mt-0.5"
+                  >
+                    {mainDemand?.title || 'Demanda Principal Vinculada'}
+                  </h4>
+                </div>
+              </div>
+
+              <div className="shrink-0 self-start sm:self-center">
+                <span className="text-xs font-bold px-3.5 py-1.5 rounded-full border bg-emerald-50 text-emerald-700 border-emerald-300 shadow-2xs">
+                  Status Atual: {mainDemand?.status === 'voting' ? 'Votação Aberta' : mainDemand ? getStatusLabel(mainDemand.status) : 'Votação Aberta'}
+                </span>
+              </div>
+            </div>
+
+            {/* Separador sutil */}
+            <div className="border-t border-purple-100/80" />
+
+            {/* Linha inferior: Texto explicativo e Botão Acessar Demanda Principal */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <p className="text-xs sm:text-sm text-purple-900/80 leading-relaxed">
+                Sua dor foi unificada pelo time Casa Magalhães a esta demanda para somar forças na votação e acelerar a entrega no{' '}
+                <strong className="font-bold text-purple-950">
+                  {mainDemand?.product || idea.product || 'Varejofacil'}
+                </strong>.
+              </p>
+
+              <button
+                type="button"
+                onClick={() => {
+                  if (mainDemand) {
+                    setSelectedIdeaDetailsId(mainDemand.id);
+                  } else {
+                    setSelectedIdeaDetailsId(idea.id);
+                  }
+                }}
+                className="px-4 py-2 bg-[#7C3AED] hover:bg-[#6D28D9] text-white text-xs sm:text-sm font-bold rounded-xl shadow-xs flex items-center gap-2 cursor-pointer transition-all hover:shadow-md shrink-0 self-start sm:self-auto"
+              >
+                <ExternalLink className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                <span>Acessar Demanda Principal</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Insumos / Anexos */}
+          {idea.attachments && idea.attachments.length > 0 && (
+            <div className="mt-3 flex items-center gap-1.5 text-xs text-slate-500">
+              <Paperclip className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+              <span className="font-semibold text-slate-700">
+                {idea.attachments.length} insumo(s) anexado(s)
+              </span>
+              <span className="text-slate-400 font-normal">
+                (planilhas/documentos)
+              </span>
+            </div>
+          )}
+        </div>
+
+        {/* Rodapé: Comentários, Votos Consolidados e Ver Detalhes */}
+        <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3 mt-auto">
+          <div className="flex items-center gap-2.5">
+            {/* Botão Comentários */}
+            <button
+              type="button"
+              onClick={() => setCommentsDrawerIdeaId(idea.id)}
+              className="px-3.5 py-2 rounded-xl text-xs font-bold text-slate-700 hover:text-emerald-800 bg-white hover:bg-slate-50 border border-slate-200 transition-all flex items-center gap-2 shadow-2xs cursor-pointer"
+              title="Ver comentários no painel lateral"
+            >
+              <MessageSquare className="w-4 h-4 text-emerald-600" />
+              <span>Comentários</span>
+              <span className="px-1.5 py-0.2 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-extrabold">
+                {idea.comments.length}
+              </span>
+            </button>
+
+            {/* Votos Consolidados */}
+            <div className="text-xs text-slate-600 font-medium px-3.5 py-2 bg-white rounded-xl border border-slate-200 flex items-center gap-1 select-none">
+              <span className="text-slate-900 font-bold">{consolidatedScore}</span>
+              <span>votos consolidados</span>
+            </div>
+          </div>
+
+          {/* Botão Ver Detalhes */}
+          <button
+            type="button"
+            onClick={() => setSelectedIdeaDetailsId(idea.id)}
+            className="px-3.5 py-2 text-xs sm:text-sm font-bold text-emerald-700 hover:text-emerald-800 hover:bg-emerald-50 rounded-xl transition-colors flex items-center gap-1.5 ml-auto sm:ml-0 cursor-pointer"
+          >
+            <span>Ver Detalhes</span>
+            <ChevronRight className="w-4 h-4 stroke-[2.5]" />
+          </button>
+        </div>
+      </div>
+    );
   };
 
   // If user is not authenticated, render pixel perfect login from index.html!
@@ -1612,6 +2028,61 @@ export default function HomePage() {
   const userReturnedIdeas = myIdeas.filter((i) => i.status === 'rejected');
   const userReturnedCount = userReturnedIdeas.length;
 
+  // O alerta só deve ser exibido se houver ideias recusadas que ainda não foram fechadas/dispensadas pelo usuário
+  const hasUndismissedRejectedIdeas = userReturnedIdeas.some(
+    (i) => !dismissedRejectedIdeaIds.includes(i.id)
+  );
+  const showRejectedBanner = userReturnedCount > 0 && hasUndismissedRejectedIdeas;
+
+  const handleDismissRejectedBanner = () => {
+    const currentRejectedIds = userReturnedIdeas.map((i) => i.id);
+    if (!currentRejectedIds.length) return;
+
+    const updated = Array.from(new Set([...dismissedRejectedIdeaIds, ...currentRejectedIds]));
+    setDismissedRejectedIdeaIds(updated);
+
+    if (typeof window !== 'undefined') {
+      const cleanEmail = user?.email?.trim().toLowerCase();
+      const storageKey = cleanEmail
+        ? `cm_dismissed_rejected_ids_${cleanEmail}`
+        : 'cm_dismissed_rejected_ids_default';
+      try {
+        localStorage.setItem(storageKey, JSON.stringify(updated));
+      } catch (err) {
+        console.warn('Erro ao salvar dismissedRejectedIdeaIds no localStorage:', err);
+      }
+    }
+
+    // Persiste no backend da conta do usuário para funcionar entre diferentes navegadores/dispositivos
+    fetch('/api/users/dismiss-rejected-ideas', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ideaIds: currentRejectedIds }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data?.success && Array.isArray(data.dismissedRejectedIdeaIds)) {
+          setDismissedRejectedIdeaIds((prev) =>
+            Array.from(new Set([...prev, ...data.dismissedRejectedIdeaIds]))
+          );
+        }
+      })
+      .catch((err) => {
+        console.warn('Aviso: erro ao persistir ideias dispensadas no servidor:', err);
+      });
+  };
+
+  const myIdeasStats = {
+    total: myIdeas.length,
+    voting: myIdeas.filter((i) => i.status === 'voting').length,
+    merged: myIdeas.filter((i) => i.status === 'merged').length,
+    inDevelopment: myIdeas.filter((i) =>
+      ['in_immersion', 'in_development', 'in_validation', 'in_pilot'].includes(i.status)
+    ).length,
+    delivered: myIdeas.filter((i) => i.status === 'delivered').length,
+    rejected: myIdeas.filter((i) => i.status === 'rejected').length,
+  };
+
   const statusCounts = {
     disponiveis: ideas.filter((i) => i.status === 'voting').length,
     desenvolvimento: ideas.filter((i) =>
@@ -1847,31 +2318,7 @@ export default function HomePage() {
               </div>
             </div>
 
-            {userReturnedCount > 0 && statusTab !== 'minhas' && (
-              <div className="bg-gradient-to-r from-rose-50 via-amber-50 to-orange-50 border border-rose-200 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
-                <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-xl bg-rose-100 text-rose-700 flex items-center justify-center shrink-0">
-                    <AlertCircle className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <div className="text-xs sm:text-sm font-bold text-rose-900">
-                      Você possui {userReturnedCount} {userReturnedCount === 1 ? 'ideia recusada' : 'ideias recusadas'} pela curadoria
-                    </div>
-                    <div className="text-[11px] sm:text-xs text-rose-700">
-                      A curadoria analisou e registrou a justificativa da recusa. Acesse a aba &quot;Minhas Ideias&quot; para consultar o parecer.
-                    </div>
-                  </div>
-                </div>
-                <button
-                  onClick={() => setStatusTab('minhas')}
-                  className="px-3.5 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold transition-colors shrink-0 shadow-xs cursor-pointer"
-                >
-                  Ver Minhas Ideias Recusadas
-                </button>
-              </div>
-            )}
-
-            {/* Tabs de Status: Disponíveis, Desenvolvimento, Entregues, Minhas Ideias */}
+            {/* Tabs de Status: Disponíveis, Desenvolvimento, Entregues, Minhas Ideias (conforme minhas_ideias.png) */}
             <div className="bg-white border border-slate-200/80 rounded-2xl p-2 shadow-xs flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2">
               <div className="flex items-center gap-1.5 overflow-x-auto p-0.5">
                 <button
@@ -1942,42 +2389,232 @@ export default function HomePage() {
                     onClick={() => setStatusTab('minhas')}
                     className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
                       statusTab === 'minhas'
-                        ? 'bg-amber-600 text-white shadow-md shadow-amber-600/20'
+                        ? 'bg-[#0B6B58] text-white shadow-md shadow-emerald-950/20'
                         : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
                     }`}
                   >
-                    <Lightbulb className="w-3.5 h-3.5" />
+                    <UserIcon className="w-4 h-4" />
                     <span>Minhas Ideias</span>
                     <span
                       className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
                         statusTab === 'minhas'
-                          ? 'bg-white/20 text-white'
-                          : userReturnedCount > 0
-                          ? 'bg-rose-100 text-rose-800 border border-rose-200'
-                          : 'bg-amber-50 text-amber-800 border border-amber-200'
+                          ? 'bg-[#07473A] text-white border border-emerald-600/40'
+                          : 'bg-emerald-50 text-emerald-800 border border-emerald-200'
                       }`}
                     >
                       {statusCounts.minhas}
                     </span>
-                    {userReturnedCount > 0 && (
-                      <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-rose-600 text-white font-extrabold animate-pulse">
-                        {userReturnedCount} {userReturnedCount === 1 ? 'recusada' : 'recusadas'}
-                      </span>
-                    )}
                   </button>
                 )}
               </div>
 
-              <div className="text-[11px] text-slate-500 font-medium px-2 py-1 text-right hidden lg:block">
+              <div className="text-[11px] sm:text-xs text-slate-500 font-medium px-2 py-1 text-right hidden lg:block">
                 {statusTab === 'disponiveis' && 'Apenas ideias aprovadas em votação pública aberta'}
                 {statusTab === 'desenvolvimento' && 'Demandas aprovadas em desenvolvimento de engenharia'}
                 {statusTab === 'entregues' && 'Funcionalidades já disponibilizadas na versão oficial do ERP/PDV'}
-                {statusTab === 'minhas' && 'Todas as demandas cadastradas por você, incluindo as recusadas na triagem'}
+                {statusTab === 'minhas' && 'Acompanhe as demandas, agrupamentos e status das ideias da sua loja'}
               </div>
             </div>
 
-            {/* Barra de Filtros e Busca */}
-            <div className="bg-white border border-slate-200/80 rounded-2xl p-4 shadow-xs space-y-3">
+            {/* Alerta de Ideia Recusada pela Curadoria (conforme minhas_ideias.png) */}
+            {showRejectedBanner && !sessionDismissedBanner && (
+              <div className="bg-[#FFF5F5] border border-rose-200/90 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-2xs">
+                <div className="flex items-center gap-3.5">
+                  <div className="w-10 h-10 rounded-2xl bg-[#E11D48] text-white flex items-center justify-center shrink-0 shadow-xs">
+                    <AlertTriangle className="w-5 h-5 text-white" />
+                  </div>
+                  <div>
+                    <h4 className="text-sm sm:text-base font-bold text-slate-900 leading-tight">
+                      Você possui {userReturnedCount} {userReturnedCount === 1 ? 'ideia recusada' : 'ideias recusadas'} pela curadoria
+                    </h4>
+                    <p className="text-xs sm:text-sm text-slate-600 mt-0.5">
+                      A equipe de produto avaliou sua submissão. Clique abaixo para consultar os motivos e direcionamentos fiscais/operacionais.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3 w-full sm:w-auto justify-end shrink-0">
+                  <button
+                    onClick={() => {
+                      handleDismissRejectedBanner();
+                      setStatusTab('minhas');
+                      setMyIdeasSubFilter('rejected');
+                    }}
+                    className="px-5 py-2 bg-[#D81B60] hover:bg-[#C2185B] text-white rounded-full text-xs sm:text-sm font-bold shadow-xs flex items-center gap-1.5 transition-all cursor-pointer shrink-0"
+                  >
+                    <span>Ver Minhas Ideias Recusadas</span>
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => setSessionDismissedBanner(true)}
+                    className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg transition-colors cursor-pointer shrink-0"
+                    title="Fechar alerta"
+                    aria-label="Fechar alerta"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* TELA DE MINHAS IDEIAS: CARDS E TOOLBAR (conforme minhas_ideias.png) */}
+            {statusTab === 'minhas' && (
+              <div className="space-y-4">
+                {/* 5 Cards de Resumo */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
+                  {/* 1. TOTAL ENVIADAS */}
+                  <div
+                    onClick={() => setMyIdeasSubFilter('ALL')}
+                    className={`bg-white rounded-2xl p-4 sm:p-5 shadow-xs flex flex-col justify-between cursor-pointer transition-all hover:shadow-md ${
+                      myIdeasSubFilter === 'ALL'
+                        ? 'border-2 border-emerald-500'
+                        : 'border border-slate-200/80 hover:border-emerald-300'
+                    }`}
+                  >
+                    <div className="text-[11px] font-bold tracking-wider text-slate-500 uppercase">
+                      TOTAL ENVIADAS
+                    </div>
+                    <div className="text-3xl font-extrabold text-slate-900 mt-1.5">
+                      {myIdeasStats.total}
+                    </div>
+                    <div className="text-xs text-slate-400 mt-1">
+                      Todas as demandas
+                    </div>
+                  </div>
+
+                  {/* 2. EM VOTAÇÃO */}
+                  <div
+                    onClick={() => setMyIdeasSubFilter('voting')}
+                    className={`bg-white rounded-2xl p-4 sm:p-5 shadow-xs flex flex-col justify-between cursor-pointer transition-all hover:shadow-md ${
+                      myIdeasSubFilter === 'voting'
+                        ? 'border-2 border-emerald-500'
+                        : 'border border-slate-200/80 hover:border-emerald-300'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 text-[11px] font-bold tracking-wider text-emerald-700 uppercase">
+                      <ThumbsUp className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>EM VOTAÇÃO</span>
+                    </div>
+                    <div className="text-3xl font-extrabold text-slate-900 mt-1.5">
+                      {myIdeasStats.voting}
+                    </div>
+                    <div className="text-xs text-slate-400 mt-1">
+                      Disponíveis para apoio
+                    </div>
+                  </div>
+
+                  {/* 3. AGRUPADAS */}
+                  <div
+                    onClick={() => setMyIdeasSubFilter('merged')}
+                    className={`bg-white rounded-2xl p-4 sm:p-5 shadow-xs flex flex-col justify-between cursor-pointer transition-all hover:shadow-md ${
+                      myIdeasSubFilter === 'merged'
+                        ? 'border-2 border-purple-500'
+                        : 'border border-purple-200/80 hover:border-purple-300'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 text-[11px] font-bold tracking-wider text-purple-700 uppercase">
+                      <Layers className="w-3.5 h-3.5 text-purple-600" />
+                      <span>AGRUPADAS</span>
+                    </div>
+                    <div className="text-3xl font-extrabold text-slate-900 mt-1.5">
+                      {myIdeasStats.merged}
+                    </div>
+                    <div className="text-xs text-slate-400 mt-1">
+                      Amarradas à demanda principal
+                    </div>
+                  </div>
+
+                  {/* 4. ENTREGUES */}
+                  <div
+                    onClick={() => setMyIdeasSubFilter('delivered')}
+                    className={`bg-white rounded-2xl p-4 sm:p-5 shadow-xs flex flex-col justify-between cursor-pointer transition-all hover:shadow-md ${
+                      myIdeasSubFilter === 'delivered'
+                        ? 'border-2 border-teal-500'
+                        : 'border border-teal-200/80 hover:border-teal-300'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 text-[11px] font-bold tracking-wider text-teal-700 uppercase">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-teal-600" />
+                      <span>ENTREGUES</span>
+                    </div>
+                    <div className="text-3xl font-extrabold text-slate-900 mt-1.5">
+                      {myIdeasStats.delivered}
+                    </div>
+                    <div className="text-xs text-slate-400 mt-1">
+                      Com Build oficial
+                    </div>
+                  </div>
+
+                  {/* 5. RECUSADAS */}
+                  <div
+                    onClick={() => setMyIdeasSubFilter('rejected')}
+                    className={`bg-white rounded-2xl p-4 sm:p-5 shadow-xs flex flex-col justify-between cursor-pointer transition-all hover:shadow-md ${
+                      myIdeasSubFilter === 'rejected'
+                        ? 'border-2 border-rose-500'
+                        : 'border border-rose-200/80 hover:border-rose-300'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 text-[11px] font-bold tracking-wider text-rose-700 uppercase">
+                      <XCircle className="w-3.5 h-3.5 text-rose-600" />
+                      <span>RECUSADAS</span>
+                    </div>
+                    <div className="text-3xl font-extrabold text-slate-900 mt-1.5">
+                      {myIdeasStats.rejected}
+                    </div>
+                    <div className="text-xs text-slate-400 mt-1">
+                      Pela curadoria CM
+                    </div>
+                  </div>
+                </div>
+
+
+                {/* Busca e Alternador de Visualização para Minhas Ideias */}
+                <div className="bg-white border border-slate-200/80 rounded-2xl p-3 px-4 shadow-xs flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+                  <div className="relative flex-1">
+                    <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      placeholder="Buscar entre minhas ideias por dor, título ou setor..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 placeholder-slate-400 focus:ring-2 focus:ring-emerald-500 focus:bg-white focus:outline-none transition-all"
+                    />
+                  </div>
+
+                  <div className="flex items-center bg-slate-100 border border-slate-200 rounded-xl p-1 shrink-0 self-end sm:self-auto">
+                    <button
+                      type="button"
+                      onClick={() => handleSetViewMode('cards')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer outline-none focus:outline-none focus:ring-0 select-none ${
+                        viewMode === 'cards'
+                          ? 'bg-white text-emerald-800 shadow-xs border border-slate-200/80'
+                          : 'text-slate-600 hover:text-slate-900 border border-transparent hover:bg-slate-200/50'
+                      }`}
+                      title="Visualização em Cards"
+                    >
+                      <LayoutGrid className="w-4 h-4 text-emerald-600" />
+                      <span>Cards</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSetViewMode('list')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer outline-none focus:outline-none focus:ring-0 select-none ${
+                        viewMode === 'list'
+                          ? 'bg-white text-emerald-800 shadow-xs border border-slate-200/80'
+                          : 'text-slate-600 hover:text-slate-900 border border-transparent hover:bg-slate-200/50'
+                      }`}
+                      title="Visualização em Lista"
+                    >
+                      <List className="w-4 h-4 text-emerald-600" />
+                      <span>Lista</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Barra de Filtros e Busca (exibida no Mural geral) */}
+            {statusTab !== 'minhas' && (
+              <div className="bg-white border border-slate-200/80 rounded-2xl p-4 shadow-xs space-y-3">
               <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3">
                 <div className="relative flex-1">
                   <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
@@ -2063,11 +2700,16 @@ export default function HomePage() {
                 </div>
               </div>
             </div>
+          )}
 
-            {/* Visualização em Cards (conforme card_lista.png) */}
+            {/* Visualização em Cards */}
             {viewMode === 'cards' && (
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5 animate-fade-in">
                 {filteredIdeas.map((idea) => {
+                  if (idea.status === 'merged') {
+                    return renderMergedIdeaCard(idea, true);
+                  }
+
                   const { positive: posCount, negative: negCount, score } = getVoteCounts(idea.votes);
                   const userVote = getUserVote(idea.votes, user?.email);
                   const isAuthor = isIdeaAuthor(idea);
@@ -2308,6 +2950,10 @@ export default function HomePage() {
             {viewMode === 'list' && (
               <div className="flex flex-col gap-4 animate-fade-in">
                 {filteredIdeas.map((idea) => {
+                  if (idea.status === 'merged') {
+                    return renderMergedIdeaCard(idea, false);
+                  }
+
                   const { positive: posCount, negative: negCount, score } = getVoteCounts(idea.votes);
                   const userVote = getUserVote(idea.votes, user?.email);
                   const isAuthor = isIdeaAuthor(idea);
@@ -2588,10 +3234,23 @@ export default function HomePage() {
                   {statusTab === 'disponiveis' && 'Nenhuma ideia aprovada para votação no momento'}
                   {statusTab === 'desenvolvimento' && 'Nenhuma demanda em desenvolvimento'}
                   {statusTab === 'entregues' && 'Nenhuma demanda entregue neste filtro'}
+                  {statusTab === 'minhas' && (
+                    myIdeasSubFilter === 'merged'
+                      ? 'Nenhuma ideia agrupada encontrada'
+                      : myIdeasSubFilter === 'rejected'
+                      ? 'Nenhuma ideia recusada encontrada'
+                      : myIdeasSubFilter === 'voting'
+                      ? 'Nenhuma ideia em votação no momento'
+                      : myIdeasSubFilter === 'delivered'
+                      ? 'Nenhuma demanda entregue'
+                      : 'Nenhuma ideia cadastrada por você ainda'
+                  )}
                 </h3>
                 <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
                   {statusTab === 'disponiveis'
                     ? 'As novas demandas enviadas aparecerão aqui assim que forem avaliadas e aprovadas na Triagem.'
+                    : statusTab === 'minhas'
+                    ? 'Suas submissões e demandas unificadas aparecerão aqui.'
                     : 'Tente alterar seus termos de busca ou filtros de sistema/setor.'}
                 </p>
               </div>
@@ -3353,7 +4012,10 @@ export default function HomePage() {
                   type="text"
                   placeholder="Buscar por Nome, CNPJ ou E-mail..."
                   value={userSearchQuery}
-                  onChange={(e) => setUserSearchQuery(e.target.value)}
+                  onChange={(e) => {
+                    setUserSearchQuery(e.target.value);
+                    setUserCurrentPage(1);
+                  }}
                   className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 placeholder-slate-400 focus:ring-2 focus:ring-emerald-500 focus:bg-white focus:outline-none transition-all"
                 />
               </div>
@@ -3363,7 +4025,10 @@ export default function HomePage() {
                   <Filter className="w-3.5 h-3.5 text-teal-600" /> Status:
                 </span>
                 <button
-                  onClick={() => setUserStatusFilter('TODOS')}
+                  onClick={() => {
+                    setUserStatusFilter('TODOS');
+                    setUserCurrentPage(1);
+                  }}
                   className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                     userStatusFilter === 'TODOS'
                       ? 'bg-slate-800 text-white shadow-xs'
@@ -3373,7 +4038,10 @@ export default function HomePage() {
                   Todos ({users.length})
                 </button>
                 <button
-                  onClick={() => setUserStatusFilter('active')}
+                  onClick={() => {
+                    setUserStatusFilter('active');
+                    setUserCurrentPage(1);
+                  }}
                   className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                     userStatusFilter === 'active'
                       ? 'bg-emerald-600 text-white shadow-xs'
@@ -3383,7 +4051,10 @@ export default function HomePage() {
                   Ativos ({users.filter((u) => u.status === 'active').length})
                 </button>
                 <button
-                  onClick={() => setUserStatusFilter('inactive')}
+                  onClick={() => {
+                    setUserStatusFilter('inactive');
+                    setUserCurrentPage(1);
+                  }}
                   className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                     userStatusFilter === 'inactive'
                       ? 'bg-rose-600 text-white shadow-xs'
@@ -3416,117 +4087,94 @@ export default function HomePage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {users
-                      .filter((u) => {
-                        if (userStatusFilter !== 'TODOS' && u.status !== userStatusFilter) return false;
-                        if (userSearchQuery.trim()) {
-                          const q = userSearchQuery.toLowerCase();
-                          const matchName = (u.name || '').toLowerCase().includes(q);
-                          const matchCnpj = (u.cnpj || '').toLowerCase().includes(q);
-                          const matchEmail = (u.email || '').toLowerCase().includes(q);
-                          if (!matchName && !matchCnpj && !matchEmail) return false;
-                        }
-                        return true;
-                      })
-                      .map((u) => (
-                        <tr
-                          key={u.id}
-                          className={`hover:bg-slate-50/70 transition-colors ${
-                            u.status === 'inactive' ? 'bg-slate-50/40 text-slate-400' : ''
-                          }`}
-                        >
-                          <td className="py-3.5 px-5">
-                            <div
-                              className={`font-bold ${
-                                u.status === 'inactive' ? 'text-slate-500 line-through' : 'text-slate-900'
-                              }`}
-                            >
-                              {u.name}
-                            </div>
-                            <div className="text-[11px] text-slate-400">
-                              Cadastrado em {formatDateBR(u.createdAt || '2026-01-01')}
-                            </div>
-                          </td>
-                          <td
-                            className={`py-3.5 px-4 font-mono font-medium ${
-                              u.status === 'inactive' ? 'text-slate-400' : 'text-slate-700'
+                    {paginatedUsers.map((u) => (
+                      <tr
+                        key={u.id}
+                        className={`hover:bg-slate-50/70 transition-colors ${
+                          u.status === 'inactive' ? 'bg-slate-50/40 text-slate-400' : ''
+                        }`}
+                      >
+                        <td className="py-3.5 px-5">
+                          <div
+                            className={`font-bold ${
+                              u.status === 'inactive' ? 'text-slate-500 line-through' : 'text-slate-900'
                             }`}
                           >
-                            {u.cnpj || '—'}
-                          </td>
-                          <td className={`py-3.5 px-4 ${u.status === 'inactive' ? 'text-slate-400' : 'text-slate-600'}`}>
-                            {u.email}
-                          </td>
-                          <td className="py-3.5 px-4">
+                            {u.name}
+                          </div>
+                          <div className="text-[11px] text-slate-400">
+                            Cadastrado em {formatDateBR(u.createdAt || '2026-01-01')}
+                          </div>
+                        </td>
+                        <td
+                          className={`py-3.5 px-4 font-mono font-medium ${
+                            u.status === 'inactive' ? 'text-slate-400' : 'text-slate-700'
+                          }`}
+                        >
+                          {u.cnpj || '—'}
+                        </td>
+                        <td className={`py-3.5 px-4 ${u.status === 'inactive' ? 'text-slate-400' : 'text-slate-600'}`}>
+                          {u.email}
+                        </td>
+                        <td className="py-3.5 px-4">
+                          <span
+                            className={`px-2.5 py-0.5 rounded-full font-bold text-[11px] border ${
+                              u.role === 'admin'
+                                ? 'bg-teal-50 text-teal-800 border-teal-200'
+                                : 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                            }`}
+                          >
+                            {u.role === 'admin' ? 'Administrador CM' : 'Supermercadista'}
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-4 text-center">
+                          <span
+                            className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${
+                              u.status === 'active'
+                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                : 'bg-rose-50 text-rose-700 border-rose-200'
+                            }`}
+                          >
                             <span
-                              className={`px-2.5 py-0.5 rounded-full font-bold text-[11px] border ${
-                                u.role === 'admin'
-                                  ? 'bg-teal-50 text-teal-800 border-teal-200'
-                                  : 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                              className={`w-1.5 h-1.5 rounded-full ${
+                                u.status === 'active' ? 'bg-emerald-500' : 'bg-rose-500'
                               }`}
+                            />
+                            <span>{u.status === 'active' ? 'Ativo' : 'Inativo'}</span>
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-5 text-right">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              onClick={() => handleOpenUserModal(u.id)}
+                              className="p-1.5 rounded-lg text-slate-600 hover:text-emerald-700 hover:bg-emerald-50 border border-slate-200 transition-colors cursor-pointer"
+                              title="Editar Dados do Usuário"
                             >
-                              {u.role === 'admin' ? 'Administrador CM' : 'Supermercadista'}
-                            </span>
-                          </td>
-                          <td className="py-3.5 px-4 text-center">
-                            <span
-                              className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => toggleUserStatus(u.id)}
+                              className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold border transition-colors flex items-center gap-1 cursor-pointer ${
                                 u.status === 'active'
-                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                  : 'bg-rose-50 text-rose-700 border-rose-200'
+                                  ? 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
+                                  : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
                               }`}
+                              title={u.status === 'active' ? 'Desativar este usuário' : 'Reativar este usuário'}
                             >
-                              <span
-                                className={`w-1.5 h-1.5 rounded-full ${
-                                  u.status === 'active' ? 'bg-emerald-500' : 'bg-rose-500'
-                                }`}
-                              />
-                              <span>{u.status === 'active' ? 'Ativo' : 'Inativo'}</span>
-                            </span>
-                          </td>
-                          <td className="py-3.5 px-5 text-right">
-                            <div className="flex items-center justify-end gap-1.5">
-                              <button
-                                onClick={() => handleOpenUserModal(u.id)}
-                                className="p-1.5 rounded-lg text-slate-600 hover:text-emerald-700 hover:bg-emerald-50 border border-slate-200 transition-colors cursor-pointer"
-                                title="Editar Dados do Usuário"
-                              >
-                                <Pencil className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                onClick={() => toggleUserStatus(u.id)}
-                                className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold border transition-colors flex items-center gap-1 cursor-pointer ${
-                                  u.status === 'active'
-                                    ? 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
-                                    : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
-                                }`}
-                                title={u.status === 'active' ? 'Desativar este usuário' : 'Reativar este usuário'}
-                              >
-                                {u.status === 'active' ? (
-                                  <UserX className="w-3.5 h-3.5" />
-                                ) : (
-                                  <UserCheck className="w-3.5 h-3.5" />
-                                )}
-                                <span>{u.status === 'active' ? 'Inativar' : 'Ativar'}</span>
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
+                              {u.status === 'active' ? (
+                                <UserX className="w-3.5 h-3.5" />
+                              ) : (
+                                <UserCheck className="w-3.5 h-3.5" />
+                              )}
+                              <span>{u.status === 'active' ? 'Inativar' : 'Ativar'}</span>
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
-                {!usersLoading && users.filter((u) => {
-                  if (userStatusFilter !== 'TODOS' && u.status !== userStatusFilter) return false;
-                  if (userSearchQuery.trim()) {
-                    const q = userSearchQuery.toLowerCase();
-                    return (
-                      (u.name || '').toLowerCase().includes(q) ||
-                      (u.cnpj || '').toLowerCase().includes(q) ||
-                      (u.email || '').toLowerCase().includes(q)
-                    );
-                  }
-                  return true;
-                }).length === 0 && (
+                {!usersLoading && filteredUsers.length === 0 && (
                   <div className="flex flex-col items-center justify-center py-12 text-slate-400 gap-2">
                     <Users className="w-8 h-8 text-slate-300" />
                     <span className="text-sm font-medium">Nenhum usuário encontrado.</span>
@@ -3536,6 +4184,23 @@ export default function HomePage() {
                   </div>
                 )}
               </div>
+              )}
+              {/* Paginação de Usuários */}
+              {!usersLoading && (
+                <Pagination
+                  currentPage={safeUserCurrentPage}
+                  totalPages={totalUserPages}
+                  totalItems={filteredUsers.length}
+                  itemsPerPage={userItemsPerPage}
+                  onPageChange={(page) => setUserCurrentPage(page)}
+                  onItemsPerPageChange={(newPerPage) => {
+                    setUserItemsPerPage(newPerPage);
+                    setUserCurrentPage(1);
+                  }}
+                  pageSizeOptions={[5, 10, 20, 50]}
+                  itemName="usuário"
+                  itemPluralName="usuários"
+                />
               )}
             </div>
           </div>
@@ -3610,6 +4275,65 @@ export default function HomePage() {
                     </div>
                   </div>
                 )}
+
+                {/* Demanda Principal Vinculada à Ideia Agrupada */}
+                {selectedIdeaDetails.status === 'merged' && (() => {
+                  const mainDemand = selectedIdeaDetails.mergedIntoId ? ideas.find((i) => i.id === selectedIdeaDetails.mergedIntoId) : null;
+                  return (
+                    <div className="bg-[#FAF5FF]/70 border border-purple-200/80 rounded-2xl p-4 sm:p-5 flex flex-col gap-3.5">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div className="flex items-start sm:items-center gap-3">
+                          <div className="w-9 h-9 rounded-xl bg-[#7C3AED] text-white flex items-center justify-center shrink-0 shadow-xs">
+                            <Layers className="w-5 h-5 text-white" />
+                          </div>
+                          <div>
+                            <span className="text-[11px] font-extrabold text-purple-700 uppercase tracking-wider block">
+                              DEMANDA PRINCIPAL VINCULADA À SUA IDEIA:
+                            </span>
+                            <h4
+                              onClick={() => {
+                                if (mainDemand) {
+                                  setSelectedIdeaDetailsId(mainDemand.id);
+                                }
+                              }}
+                              className="text-sm sm:text-base font-bold text-slate-900 hover:text-purple-700 transition-colors cursor-pointer leading-tight mt-0.5"
+                            >
+                              {mainDemand?.title || 'Demanda Principal Vinculada'}
+                            </h4>
+                          </div>
+                        </div>
+
+                        <div className="shrink-0 self-start sm:self-center">
+                          <span className="text-xs font-bold px-3.5 py-1.5 rounded-full border bg-emerald-50 text-emerald-700 border-emerald-300 shadow-2xs">
+                            Status Atual: {mainDemand?.status === 'voting' ? 'Votação Aberta' : mainDemand ? getStatusLabel(mainDemand.status) : 'Votação Aberta'}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="border-t border-purple-100/80" />
+
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <p className="text-xs sm:text-sm text-purple-900/80 leading-relaxed">
+                          Sua dor foi unificada pelo time Casa Magalhães a esta demanda para somar forças na votação e acelerar a entrega no{' '}
+                          <strong className="font-bold text-purple-950">
+                            {mainDemand?.product || selectedIdeaDetails.product || 'Varejofacil'}
+                          </strong>.
+                        </p>
+
+                        {mainDemand && (
+                          <button
+                            type="button"
+                            onClick={() => setSelectedIdeaDetailsId(mainDemand.id)}
+                            className="px-4 py-2 bg-[#7C3AED] hover:bg-[#6D28D9] text-white text-xs sm:text-sm font-bold rounded-xl shadow-xs flex items-center gap-2 cursor-pointer transition-all hover:shadow-md shrink-0 self-start sm:self-auto"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                            <span>Acessar Demanda Principal</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* Dor na Operação */}
                 <div className="bg-rose-50/50 p-4 rounded-2xl border border-rose-100 space-y-1.5">
@@ -3778,6 +4502,17 @@ export default function HomePage() {
                             />
                             <span>Negativo (-{drawerVotes.negative})</span>
                           </button>
+                        </div>
+                      ) : selectedIdeaDetails.status === 'merged' ? (
+                        <div className="text-xs text-slate-600 font-medium px-3.5 py-2 bg-white rounded-xl border border-slate-200 flex items-center gap-1 select-none">
+                          <span className="text-slate-900 font-bold">
+                            {(() => {
+                              const main = selectedIdeaDetails.mergedIntoId ? ideas.find((i) => i.id === selectedIdeaDetails.mergedIntoId) : null;
+                              const v = main ? main.votes : selectedIdeaDetails.votes;
+                              return Math.max(0, getVoteCounts(v).score);
+                            })()}
+                          </span>
+                          <span>votos consolidados</span>
                         </div>
                       ) : (
                         <div className="text-xs text-slate-600 font-semibold px-3 py-1.5 bg-white rounded-xl border border-slate-200 flex items-center gap-2 select-none">
